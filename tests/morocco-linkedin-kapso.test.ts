@@ -15,6 +15,8 @@ import {
   extractKapsoInboundMessages,
   normalizeWhatsAppPhone,
   processKapsoInboundDecision,
+  resolveKapsoPhoneNumber,
+  sendKapsoTemplateMessage,
   verifyKapsoWebhookSignature,
 } from "@/lib/whatsapp/kapso";
 import * as emailSender from "@/lib/email/sender";
@@ -433,5 +435,60 @@ describe("Kapso WhatsApp Webhook Security, Button Approval & Direct Email Dispat
 
     expect(outcome.status).toBe("hash_mismatch_blocked");
     expect(sendSpy).not.toHaveBeenCalled();
+  });
+
+  it("auto-discovers phone_number_id from Kapso Platform API using only KAPSO_API_KEY and sends template messages", async () => {
+    const prevKey = process.env.KAPSO_API_KEY;
+    const prevPhoneId = process.env.KAPSO_PHONE_NUMBER_ID;
+    process.env.KAPSO_API_KEY = "test_kapso_project_key";
+    delete process.env.KAPSO_PHONE_NUMBER_ID;
+
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (input: any) => {
+        const url = String(input);
+        if (url.includes("/platform/v1/whatsapp/phone_numbers")) {
+          return new Response(
+            JSON.stringify({
+              data: [
+                {
+                  id: "cfg_123",
+                  phone_number_id: "109876543210987",
+                  display_phone_number: "+1 555-019-9999",
+                  business_account_id: "waba_999",
+                  name: "jobhunter.ai",
+                },
+              ],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        }
+        if (url.includes("/v24.0/109876543210987/messages")) {
+          return new Response(
+            JSON.stringify({ messages: [{ id: "wamid.first.prod.001" }] }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        }
+        return new Response("Not Found", { status: 404 });
+      });
+
+    try {
+      const resolved = await resolveKapsoPhoneNumber();
+      expect(resolved.phoneNumberId).toBe("109876543210987");
+      expect(resolved.displayPhoneNumber).toBe("+1 555-019-9999");
+
+      const sent = await sendKapsoTemplateMessage({
+        to: "+212 614 192 699",
+        templateName: "hello_world",
+        languageCode: "en_US",
+      });
+      expect(sent.messageId).toBe("wamid.first.prod.001");
+      expect(sent.phoneNumberId).toBe("109876543210987");
+    } finally {
+      fetchMock.mockRestore();
+      if (prevKey === undefined) delete process.env.KAPSO_API_KEY;
+      else process.env.KAPSO_API_KEY = prevKey;
+      if (prevPhoneId !== undefined) process.env.KAPSO_PHONE_NUMBER_ID = prevPhoneId;
+    }
   });
 });

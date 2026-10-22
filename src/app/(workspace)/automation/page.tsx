@@ -59,6 +59,10 @@ export default function AutomationPage() {
     configured: boolean;
     webhookSecretConfigured: boolean;
   } | null>(null);
+  const [connectedKapsoSender, setConnectedKapsoSender] = useState<{
+    phoneNumberId: string;
+    displayPhoneNumber: string | null;
+  } | null>(null);
   const [whatsappApprovals, setWhatsappApprovals] = useState<Array<any>>([]);
   const [testingWhatsApp, setTestingWhatsApp] = useState(false);
 
@@ -106,6 +110,28 @@ export default function AutomationPage() {
         setRuns(d.runs ?? []);
         setWhatsappApprovals(d.whatsappApprovals ?? []);
         setKapsoStatus(d.kapso ?? null);
+
+        // Pre-fill recipient phone from profile if empty, and inspect connected Kapso sender
+        const [profRes, kapsoRes] = await Promise.all([
+          !s.whatsapp_phone_number
+            ? fetch("/api/profile").catch(() => null)
+            : Promise.resolve(null),
+          d.kapso?.configured
+            ? fetch("/api/whatsapp/kapso/test").catch(() => null)
+            : Promise.resolve(null),
+        ]);
+        if (profRes && profRes.ok) {
+          const pd = await profRes.json();
+          if (pd.profile?.phone) {
+            setWhatsappPhone(pd.profile.phone);
+          }
+        }
+        if (kapsoRes && kapsoRes.ok) {
+          const kd = await kapsoRes.json();
+          if (kd.connectedNumber) {
+            setConnectedKapsoSender(kd.connectedNumber);
+          }
+        }
       }
     } finally {
       setLoading(false);
@@ -207,7 +233,9 @@ export default function AutomationPage() {
         return;
       }
       toast.success(
-        `Message test envoyé sur WhatsApp (${data.phone}) via Kapso !`
+        data.note
+          ? `Message WhatsApp envoyé (${data.phone}) ! ${data.note}`
+          : `Message test envoyé sur WhatsApp (${data.phone}) via Kapso !`
       );
     } finally {
       setTestingWhatsApp(false);
@@ -473,8 +501,10 @@ export default function AutomationPage() {
                 >
                   Kapso API:{" "}
                   {kapsoStatus?.configured
-                    ? "Connecté"
-                    : "Requiert KAPSO_API_KEY + KAPSO_PHONE_NUMBER_ID"}
+                    ? connectedKapsoSender?.displayPhoneNumber
+                      ? `Connecté (${connectedKapsoSender.displayPhoneNumber})`
+                      : "Connecté (auto phone_number_id)"
+                    : "Requiert KAPSO_API_KEY"}
                 </Badge>
                 <Badge
                   variant={

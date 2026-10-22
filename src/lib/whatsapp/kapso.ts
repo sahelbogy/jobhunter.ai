@@ -10,21 +10,55 @@ export interface KapsoConfigStatus {
   webhookSecretConfigured: boolean;
   baseUrl: string;
   phoneNumberIdConfigured: boolean;
+  projectId: string | null;
+}
+
+export interface ResolvedKapsoNumber {
+  phoneNumberId: string;
+  displayPhoneNumber: string | null;
+  businessAccountId: string | null;
+  name: string | null;
+  source: "env" | "platform_api";
+}
+
+let cachedKapsoNumber: {
+  value: ResolvedKapsoNumber;
+  expiresAt: number;
+} | null = null;
+
+function getKapsoPlatformOrigin(metaOrPlatformBase: string): string {
+  const trimmed = metaOrPlatformBase.replace(/\/+$/, "");
+  const metaIdx = trimmed.indexOf("/meta");
+  if (metaIdx >= 0) {
+    return trimmed.slice(0, metaIdx);
+  }
+  if (trimmed.endsWith("/platform/v1")) {
+    return trimmed.slice(0, -"/platform/v1".length);
+  }
+  return trimmed;
 }
 
 export function getKapsoConfigStatus(): KapsoConfigStatus {
   const apiKey = process.env.KAPSO_API_KEY?.trim() || "";
-  const phoneNumberId = process.env.KAPSO_PHONE_NUMBER_ID?.trim() || "";
+  const phoneNumberId =
+    process.env.KAPSO_PHONE_NUMBER_ID?.trim() ||
+    process.env.WHATSAPP_PHONE_NUMBER_ID?.trim() ||
+    "";
   const webhookSecret = process.env.KAPSO_WEBHOOK_SECRET?.trim() || "";
   const baseUrl = (
-    process.env.KAPSO_BASE_URL?.trim() || "https://api.kapso.ai/meta/whatsapp"
+    process.env.KAPSO_BASE_URL?.trim() ||
+    (process.env.KAPSO_API_BASE_URL?.trim()
+      ? `${getKapsoPlatformOrigin(process.env.KAPSO_API_BASE_URL.trim())}/meta/whatsapp`
+      : "https://api.kapso.ai/meta/whatsapp")
   ).replace(/\/+$/, "");
+  const projectId = process.env.KAPSO_PROJECT_ID?.trim() || null;
 
   return {
-    configured: Boolean(apiKey && phoneNumberId),
+    configured: Boolean(apiKey),
     webhookSecretConfigured: Boolean(webhookSecret),
     baseUrl,
     phoneNumberIdConfigured: Boolean(phoneNumberId),
+    projectId,
   };
 }
 
@@ -52,30 +86,123 @@ export function normalizeWhatsAppPhone(raw: string): string {
   return digits;
 }
 
-function getKapsoCredentialsOrThrow() {
+/**
+ * Discovers the active WhatsApp `phone_number_id` from environment variables or automatically
+ * via Kapso Platform API (`GET /platform/v1/whatsapp/phone_numbers`) using `KAPSO_API_KEY`.
+ */
+export async function resolveKapsoPhoneNumber(): Promise<ResolvedKapsoNumber> {
   const apiKey = process.env.KAPSO_API_KEY?.trim();
-  const phoneNumberId = process.env.KAPSO_PHONE_NUMBER_ID?.trim();
-  const baseUrl = (
-    process.env.KAPSO_BASE_URL?.trim() || "https://api.kapso.ai/meta/whatsapp"
-  ).replace(/\/+$/, "");
-
-  if (!apiKey || !phoneNumberId) {
+  if (!apiKey) {
     throw new Error(
-      "Kapso WhatsApp integration requires KAPSO_API_KEY and KAPSO_PHONE_NUMBER_ID in server environment variables."
+      "KAPSO_API_KEY is not configured in server environment variables."
     );
   }
 
+  const explicitPhoneNumberId =
+    process.env.KAPSO_PHONE_NUMBER_ID?.trim() ||
+    process.env.WHATSAPP_PHONE_NUMBER_ID?.trim() ||
+    "";
+
+  if (explicitPhoneNumberId) {
+    return {
+      phoneNumberId: explicitPhoneNumberId,
+      displayPhoneNumber: null,
+      businessAccountId: null,
+      name: null,
+      source: "env",
+    };
+  }
+
+  if (cachedKapsoNumber && cachedKapsoNumber.expiresAt > Date.now()) {
+    return cachedKapsoNumber.value;
+  }
+
+  const status = getKapsoConfigStatus();
+  const platformOrigin = getKapsoPlatformOrigin(status.baseUrl);
+  const url = `${platformOrigin}/platform/v1/whatsapp/phone_numbers`;
+
+  const res = await fetch(url, {
+    method: "GET",
+    headers: {
+      "X-API-Key": apiKey,
+      Accept: "application/json",
+    },
+    redirect: "error",
+    signal: AbortSignal.timeout(10000),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    throw new Error(
+      `Kapso Platform API (/platform/v1/whatsapp/phone_numbers) returned HTTP ${res.status}: ${errText.slice(0, 220)}`
+    );
+  }
+
+  const payload = (await res.json().catch(() => ({}))) as Record<string, any>;
+  const list = Array.isArray(payload?.data)
+    ? payload.data
+    : Array.isArray(payload?.data?.data)
+      ? payload.data.data
+      : Array.isArray(payload?.phone_numbers)
+        ? payload.phone_numbers
+        : [];
+
+  const first = list[0];
+  const resolvedId = String(
+    first?.phone_number_id || first?.id || ""
+  ).trim();
+
+  if (!resolvedId) {
+    throw new Error(
+      "No connected WhatsApp number was found in your Kapso project. Run `kapso whatsapp numbers list` or set KAPSO_PHONE_NUMBER_ID."
+    );
+  }
+
+  const resolved: ResolvedKapsoNumber = {
+    phoneNumberId: resolvedId,
+    displayPhoneNumber: first?.display_phone_number ?? null,
+    businessAccountId: first?.business_account_id ?? null,
+    name: first?.name ?? first?.verified_name ?? null,
+    source: "platform_api",
+  };
+
+  cachedKapsoNumber = {
+    value: resolved,
+    expiresAt: Date.now() + 5 * 60 * 1000,
+  };
+
+  return resolved;
+}
+
+async function getKapsoCredentialsOrThrow() {
+  const apiKey = process.env.KAPSO_API_KEY?.trim();
+  if (!apiKey) {
+    throw new Error(
+      "Kapso WhatsApp integration requires KAPSO_API_KEY in server environment variables."
+    );
+  }
+
+  const status = getKapsoConfigStatus();
+  const resolved = await resolveKapsoPhoneNumber();
+  const graphVersion = process.env.META_GRAPH_VERSION?.trim() || "v24.0";
+
   return {
     apiKey,
-    phoneNumberId,
-    endpoint: `${baseUrl}/v24.0/${encodeURIComponent(phoneNumberId)}/messages`,
+    phoneNumberId: resolved.phoneNumberId,
+    displayPhoneNumber: resolved.displayPhoneNumber,
+    endpoint: `${status.baseUrl}/${encodeURIComponent(graphVersion)}/${encodeURIComponent(resolved.phoneNumberId)}/messages`,
   };
 }
 
 async function callKapsoMessagesApi(
   payload: Record<string, unknown>
-): Promise<{ messageId: string | null }> {
-  const { apiKey, endpoint } = getKapsoCredentialsOrThrow();
+): Promise<{
+  messageId: string | null;
+  phoneNumberId: string;
+  displayPhoneNumber: string | null;
+}> {
+  const { apiKey, endpoint, phoneNumberId, displayPhoneNumber } =
+    await getKapsoCredentialsOrThrow();
 
   const res = await fetch(endpoint, {
     method: "POST",
@@ -83,6 +210,7 @@ async function callKapsoMessagesApi(
       "X-API-Key": apiKey,
       "Content-Type": "application/json",
     },
+    redirect: "error",
     body: JSON.stringify(payload),
     signal: AbortSignal.timeout(12000),
   });
@@ -100,13 +228,19 @@ async function callKapsoMessagesApi(
 
   return {
     messageId: data?.messages?.[0]?.id ?? null,
+    phoneNumberId,
+    displayPhoneNumber,
   };
 }
 
 export async function sendKapsoTextMessage(params: {
   to: string;
   body: string;
-}): Promise<{ messageId: string | null }> {
+}): Promise<{
+  messageId: string | null;
+  phoneNumberId?: string;
+  displayPhoneNumber?: string | null;
+}> {
   const normalizedTo = normalizeWhatsAppPhone(params.to);
   if (!normalizedTo) {
     throw new Error("Invalid WhatsApp phone number. Use E.164 format (e.g. +212612345678).");
@@ -120,6 +254,34 @@ export async function sendKapsoTextMessage(params: {
     text: {
       preview_url: false,
       body: params.body.slice(0, 4000),
+    },
+  });
+}
+
+export async function sendKapsoTemplateMessage(params: {
+  to: string;
+  templateName?: string;
+  languageCode?: string;
+}): Promise<{
+  messageId: string | null;
+  phoneNumberId?: string;
+  displayPhoneNumber?: string | null;
+}> {
+  const normalizedTo = normalizeWhatsAppPhone(params.to);
+  if (!normalizedTo) {
+    throw new Error("Invalid WhatsApp phone number. Use E.164 format (e.g. +212612345678).");
+  }
+
+  return callKapsoMessagesApi({
+    messaging_product: "whatsapp",
+    recipient_type: "individual",
+    to: normalizedTo,
+    type: "template",
+    template: {
+      name: params.templateName || "hello_world",
+      language: {
+        code: params.languageCode || "en_US",
+      },
     },
   });
 }
@@ -614,6 +776,23 @@ export async function processKapsoInboundDecision(params: {
   const { adminSupabase, inbound } = params;
 
   if (!inbound.decision) {
+    if (
+      /^\s*(?:ping|test|status|hello|hi|salut|bonjour|salam)\b/i.test(
+        inbound.rawText || ""
+      )
+    ) {
+      await sendKapsoTextMessage({
+        to: inbound.fromPhone,
+        body: `✅ *AI Job Hunter est connecté via Kapso !*\nVotre fenêtre WhatsApp 24h est active. Vos candidatures préparées (Email + Lettre de Motivation PDF) arriveront ici avec les boutons *Approuver & Envoyer* / *Refuser*.`,
+      }).catch(() => null);
+
+      return {
+        handled: true,
+        status: "handshake_replied",
+        detail: "Replied to inbound connectivity handshake message.",
+      };
+    }
+
     return {
       handled: false,
       status: "ignored_non_command",

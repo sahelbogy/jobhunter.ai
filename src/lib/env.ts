@@ -69,10 +69,7 @@ export function getServerEnvStatus(): ServerEnvStatus {
         process.env.SMTP_USER?.trim() &&
         process.env.SMTP_PASS?.trim()
     ),
-    kapsoConfigured: Boolean(
-      process.env.KAPSO_API_KEY?.trim() &&
-        process.env.KAPSO_PHONE_NUMBER_ID?.trim()
-    ),
+    kapsoConfigured: Boolean(process.env.KAPSO_API_KEY?.trim()),
     kapsoWebhookSecretConfigured: Boolean(
       process.env.KAPSO_WEBHOOK_SECRET?.trim()
     ),
