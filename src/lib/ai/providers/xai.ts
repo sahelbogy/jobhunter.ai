@@ -9,13 +9,14 @@ const XAI_ENDPOINT = "https://api.x.ai/v1/chat/completions";
 export async function callXaiProvider(
   req: AiCompletionRequest
 ): Promise<AiCompletionResponse> {
-  const apiKey = process.env.XAI_API_KEY?.trim();
+  const apiKey =
+    req.apiKeyOverride?.trim() || process.env.XAI_API_KEY?.trim();
   if (!apiKey) {
     throw new AiProviderError({
       provider: "xai",
       code: "MISSING_CREDENTIALS",
       message:
-        "XAI_API_KEY is not configured on the server. xAI Grok requires paid API credits.",
+        "XAI_API_KEY is not configured. Save an xAI key in Account Settings -> AI Providers or set XAI_API_KEY in Vercel environment variables.",
       retryable: false,
     });
   }

@@ -9,6 +9,10 @@ import {
 import { callGroqProvider } from "@/lib/ai/providers/groq";
 import { callGeminiProvider } from "@/lib/ai/providers/gemini";
 import { callXaiProvider } from "@/lib/ai/providers/xai";
+import {
+  getDecryptedUserAiKeys,
+  type UserAiKeySummary,
+} from "@/lib/ai/user-secrets";
 import { getServerEnvStatus } from "@/lib/env";
 
 export type AiTaskType =
@@ -24,6 +28,8 @@ export interface AiRoutingPreferences {
   fallbackProvider?: AiProviderId | null;
   fallbackModel?: string | null;
   allowPaidFallback?: boolean;
+  userId?: string | null;
+  apiKeys?: Partial<Record<AiProviderId, string>>;
 }
 
 export interface AiExecutionResult<T = string> {
@@ -101,12 +107,17 @@ export async function executeAiTask<T = string>(params: {
     routing.primaryModel?.trim() ||
     AI_PROVIDER_CATALOG[primaryProvider].defaultModel;
 
+  const userKeys =
+    routing.apiKeys ??
+    (routing.userId ? await getDecryptedUserAiKeys(routing.userId) : {});
+
   let primaryError: AiProviderError | null = null;
 
   try {
     const res = await dispatchToProvider(primaryProvider, {
       ...request,
       modelOverride: primaryModel,
+      apiKeyOverride: request.apiKeyOverride || userKeys[primaryProvider],
     });
     const parsedData = schema
       ? schema.parse(extractJsonObject(res.content))
@@ -197,6 +208,7 @@ export async function executeAiTask<T = string>(params: {
     const res = await dispatchToProvider(fallbackProvider, {
       ...request,
       modelOverride: fallbackModel,
+      apiKeyOverride: request.apiKeyOverride || userKeys[fallbackProvider],
     });
 
     const parsedData = schema
@@ -262,32 +274,51 @@ export async function executeAiTask<T = string>(params: {
   }
 }
 
-export function getAiProvidersStatus() {
+export function getAiProvidersStatus(
+  userSecrets?: Partial<Record<AiProviderId, UserAiKeySummary>>
+) {
   const env = getServerEnvStatus();
+  const buildEntry = (
+    id: AiProviderId,
+    envConfigured: boolean,
+    activeEnvModel: string
+  ) => {
+    const secret = userSecrets?.[id];
+    const hasUserKey = Boolean(secret?.hasUserKey);
+    return {
+      ...AI_PROVIDER_CATALOG[id],
+      configured: envConfigured || hasUserKey,
+      envConfigured,
+      hasUserKey,
+      keyHint: secret?.keyHint ?? null,
+      keySource: hasUserKey
+        ? ("user_encrypted" as const)
+        : envConfigured
+          ? ("server_env" as const)
+          : ("missing" as const),
+      activeEnvModel,
+    };
+  };
+
   return [
-    {
-      ...AI_PROVIDER_CATALOG.groq,
-      configured: env.groqConfigured,
-      activeEnvModel: env.groqModel,
-    },
-    {
-      ...AI_PROVIDER_CATALOG.gemini,
-      configured: env.geminiConfigured,
-      activeEnvModel: env.geminiModel,
-    },
-    {
-      ...AI_PROVIDER_CATALOG.xai,
-      configured: env.xaiConfigured,
-      activeEnvModel: env.xaiModel,
-    },
+    buildEntry("groq", env.groqConfigured, env.groqModel),
+    buildEntry("gemini", env.geminiConfigured, env.geminiModel),
+    buildEntry("xai", env.xaiConfigured, env.xaiModel),
   ];
 }
 
 export async function testAiProviderConnection(params: {
   provider: AiProviderId;
   model?: string;
+  userId?: string;
+  apiKeyOverride?: string;
   onLog?: AiLogCallback;
 }) {
+  const userKeys =
+    !params.apiKeyOverride && params.userId
+      ? await getDecryptedUserAiKeys(params.userId)
+      : {};
+
   const res = await dispatchToProvider(params.provider, {
     systemPrompt:
       "You are a connectivity diagnostic service. Reply strictly with valid JSON: {\"ok\": true, \"message\": \"Connected\"}.",
@@ -296,6 +327,7 @@ export async function testAiProviderConnection(params: {
     maxTokens: 60,
     jsonMode: true,
     modelOverride: params.model,
+    apiKeyOverride: params.apiKeyOverride || userKeys[params.provider],
     timeoutMs: 15000,
   });
 

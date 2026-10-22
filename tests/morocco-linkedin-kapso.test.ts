@@ -12,13 +12,16 @@ import {
 } from "@/lib/jobs/linkedin";
 import { computeApprovalHash } from "@/lib/security/approval";
 import {
+  buildKapsoWaMeLink,
   extractKapsoInboundMessages,
+  listApprovedKapsoTemplates,
   normalizeWhatsAppPhone,
   processKapsoInboundDecision,
   resolveKapsoPhoneNumber,
   sendKapsoTemplateMessage,
   verifyKapsoWebhookSignature,
 } from "@/lib/whatsapp/kapso";
+import { callGroqProvider } from "@/lib/ai/providers/groq";
 import * as emailSender from "@/lib/email/sender";
 
 describe("Strict Morocco-Only Regional Filtering", () => {
@@ -479,8 +482,8 @@ describe("Kapso WhatsApp Webhook Security, Button Approval & Direct Email Dispat
 
       const sent = await sendKapsoTemplateMessage({
         to: "+212 614 192 699",
-        templateName: "hello_world",
-        languageCode: "en_US",
+        templateName: "ai_job_hunter_notification",
+        languageCode: "fr",
       });
       expect(sent.messageId).toBe("wamid.first.prod.001");
       expect(sent.phoneNumberId).toBe("109876543210987");
@@ -489,6 +492,92 @@ describe("Kapso WhatsApp Webhook Security, Button Approval & Direct Email Dispat
       if (prevKey === undefined) delete process.env.KAPSO_API_KEY;
       else process.env.KAPSO_API_KEY = prevKey;
       if (prevPhoneId !== undefined) process.env.KAPSO_PHONE_NUMBER_ID = prevPhoneId;
+    }
+  });
+
+  it("filters out Meta hello_world (#131058) on dedicated WABA numbers and builds wa.me session links", async () => {
+    expect(buildKapsoWaMeLink("+1 555-019-9999", "Bonjour")).toBe(
+      "https://wa.me/15550199999?text=Bonjour"
+    );
+
+    const prevKey = process.env.KAPSO_API_KEY;
+    process.env.KAPSO_API_KEY = "test-kapso-key";
+
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (input) => {
+        const url = String(input);
+        if (url.includes("/waba_dedicated_1/message_templates")) {
+          return new Response(
+            JSON.stringify({
+              data: [
+                {
+                  name: "hello_world",
+                  language: "en_US",
+                  status: "APPROVED",
+                  category: "UTILITY",
+                  components: [{ type: "BODY", text: "Welcome and congratulations" }],
+                },
+                {
+                  name: "ai_job_hunter_notification",
+                  language: "fr",
+                  status: "APPROVED",
+                  category: "UTILITY",
+                  components: [
+                    {
+                      type: "BODY",
+                      text: "Bonjour, votre espace AI Job Hunter est prêt.",
+                    },
+                  ],
+                },
+              ],
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } }
+          );
+        }
+        return new Response("Not Found", { status: 404 });
+      });
+
+    try {
+      const templates = await listApprovedKapsoTemplates("waba_dedicated_1");
+      expect(templates).toHaveLength(1);
+      expect(templates[0]?.name).toBe("ai_job_hunter_notification");
+      expect(templates[0]?.hasParameters).toBe(false);
+    } finally {
+      fetchMock.mockRestore();
+      if (prevKey === undefined) delete process.env.KAPSO_API_KEY;
+      else process.env.KAPSO_API_KEY = prevKey;
+    }
+  });
+
+  it("uses encrypted per-user apiKeyOverride in callGroqProvider even when server GROQ_API_KEY is unset", async () => {
+    const prevGroq = process.env.GROQ_API_KEY;
+    delete process.env.GROQ_API_KEY;
+
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            model: "llama-3.3-70b-versatile",
+            choices: [{ message: { content: "{\"ok\":true}" } }],
+            usage: { prompt_tokens: 12, completion_tokens: 5 },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+      );
+
+    try {
+      const res = await callGroqProvider({
+        systemPrompt: "Test",
+        userPrompt: "Ping",
+        apiKeyOverride: "gsk_user_encrypted_override_test_key",
+      });
+      expect(res.provider).toBe("groq");
+      expect(res.content).toBe("{\"ok\":true}");
+    } finally {
+      fetchMock.mockRestore();
+      if (prevGroq !== undefined) process.env.GROQ_API_KEY = prevGroq;
     }
   });
 });

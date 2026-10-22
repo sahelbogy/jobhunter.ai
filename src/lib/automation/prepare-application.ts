@@ -67,6 +67,7 @@ export async function prepareSingleJobApplicationForUser(params: {
       routing: {
         primaryProvider,
         fallbackProvider,
+        userId,
       },
       onLog: async (entry) => {
         await adminSupabase.from("ai_generation_logs").insert({

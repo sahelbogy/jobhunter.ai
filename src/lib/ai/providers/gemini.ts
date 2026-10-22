@@ -7,13 +7,14 @@ import {
 export async function callGeminiProvider(
   req: AiCompletionRequest
 ): Promise<AiCompletionResponse> {
-  const apiKey = process.env.GEMINI_API_KEY?.trim();
+  const apiKey =
+    req.apiKeyOverride?.trim() || process.env.GEMINI_API_KEY?.trim();
   if (!apiKey) {
     throw new AiProviderError({
       provider: "gemini",
       code: "MISSING_CREDENTIALS",
       message:
-        "GEMINI_API_KEY is not configured on the server. Add your Google AI Studio key in environment variables.",
+        "GEMINI_API_KEY is not configured. Paste a Google AI Studio key in Account Settings -> AI Providers or set GEMINI_API_KEY in Vercel environment variables.",
       retryable: false,
     });
   }

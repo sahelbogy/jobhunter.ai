@@ -277,6 +277,7 @@ export async function executeAutomationRunForUser(params: {
                   null) as AiProviderId | null,
                 fallbackModel: prefs?.fallback_ai_model ?? null,
                 allowPaidFallback: Boolean(prefs?.allow_paid_fallback),
+                userId,
               },
               onLog: async (entry) => {
                 await adminSupabase.from("ai_generation_logs").insert({

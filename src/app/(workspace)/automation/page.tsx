@@ -63,6 +63,11 @@ export default function AutomationPage() {
     phoneNumberId: string;
     displayPhoneNumber: string | null;
   } | null>(null);
+  const [kapsoWaMeLink, setKapsoWaMeLink] = useState<string | null>(null);
+  const [sessionWindowWarning, setSessionWindowWarning] = useState<
+    string | null
+  >(null);
+  const [creatingTemplate, setCreatingTemplate] = useState(false);
   const [whatsappApprovals, setWhatsappApprovals] = useState<Array<any>>([]);
   const [testingWhatsApp, setTestingWhatsApp] = useState(false);
 
@@ -130,6 +135,9 @@ export default function AutomationPage() {
           const kd = await kapsoRes.json();
           if (kd.connectedNumber) {
             setConnectedKapsoSender(kd.connectedNumber);
+          }
+          if (kd.waMeLink) {
+            setKapsoWaMeLink(kd.waMeLink);
           }
         }
       }
@@ -221,6 +229,7 @@ export default function AutomationPage() {
       return;
     }
     setTestingWhatsApp(true);
+    setSessionWindowWarning(null);
     try {
       const res = await fetch("/api/whatsapp/kapso/test", {
         method: "POST",
@@ -228,7 +237,16 @@ export default function AutomationPage() {
         body: JSON.stringify({ phone: whatsappPhone.trim() }),
       });
       const data = await res.json();
+      if (data.waMeLink) {
+        setKapsoWaMeLink(data.waMeLink);
+      }
+      if (data.connectedNumber) {
+        setConnectedKapsoSender(data.connectedNumber);
+      }
       if (!res.ok) {
+        if (data.requiresSessionWindow) {
+          setSessionWindowWarning(data.error);
+        }
         toast.error(data.error || "Kapso WhatsApp test failed.");
         return;
       }
@@ -239,6 +257,27 @@ export default function AutomationPage() {
       );
     } finally {
       setTestingWhatsApp(false);
+    }
+  }
+
+  async function handleCreateUtilityTemplate() {
+    setCreatingTemplate(true);
+    try {
+      const res = await fetch("/api/whatsapp/kapso/template", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ language: "fr" }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error || "Échec de soumission du modèle Meta.");
+        return;
+      }
+      toast.success(
+        `Modèle Meta « ${data.template?.name} » soumis (${data.template?.status}) !`
+      );
+    } finally {
+      setCreatingTemplate(false);
     }
   }
 
@@ -555,7 +594,18 @@ export default function AutomationPage() {
                 />
               </div>
 
-              <div>
+              <div className="md:col-span-2 flex flex-wrap gap-2">
+                {kapsoWaMeLink ? (
+                  <a
+                    href={kapsoWaMeLink}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3.5 text-xs font-semibold text-white hover:bg-emerald-700 transition-colors"
+                  >
+                    1. Envoyer « Bonjour » au numéro Kapso (Session 24h)
+                  </a>
+                ) : null}
+
                 <Button
                   type="button"
                   variant="outline"
@@ -567,10 +617,50 @@ export default function AutomationPage() {
                   ) : (
                     <Send className="h-4 w-4" />
                   )}
-                  Tester WhatsApp (Kapso)
+                  {kapsoWaMeLink
+                    ? "2. Tester WhatsApp (Kapso)"
+                    : "Tester WhatsApp (Kapso)"}
+                </Button>
+
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={creatingTemplate}
+                  onClick={handleCreateUtilityTemplate}
+                  className="text-xs"
+                >
+                  {creatingTemplate ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : null}
+                  Créer modèle Utility Meta (hors 24h)
                 </Button>
               </div>
             </div>
+
+            {sessionWindowWarning ? (
+              <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3.5 text-xs text-amber-950 dark:text-amber-200 space-y-2">
+                <p className="font-semibold">{sessionWindowWarning}</p>
+                {kapsoWaMeLink ? (
+                  <p>
+                    👉{" "}
+                    <a
+                      href={kapsoWaMeLink}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="underline font-semibold"
+                    >
+                      Cliquez ici pour ouvrir WhatsApp vers{" "}
+                      {connectedKapsoSender?.displayPhoneNumber ||
+                        "votre numéro Kapso"}{" "}
+                      et envoyer « Bonjour »
+                    </a>
+                    , puis recliquez immédiatement sur{" "}
+                    <strong>Tester WhatsApp (Kapso)</strong>.
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
 
             <div className="rounded-xl border bg-muted/40 p-3.5 text-xs space-y-2">
               <div className="flex flex-wrap items-center justify-between gap-2">

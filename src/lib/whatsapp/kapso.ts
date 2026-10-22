@@ -86,11 +86,23 @@ export function normalizeWhatsAppPhone(raw: string): string {
   return digits;
 }
 
+export function buildKapsoWaMeLink(
+  displayPhoneNumber?: string | null,
+  prefilledText = "Bonjour"
+): string | null {
+  if (!displayPhoneNumber) return null;
+  const digits = normalizeWhatsAppPhone(displayPhoneNumber);
+  if (!digits) return null;
+  return `https://wa.me/${digits}?text=${encodeURIComponent(prefilledText)}`;
+}
+
 /**
  * Discovers the active WhatsApp `phone_number_id` from environment variables or automatically
  * via Kapso Platform API (`GET /platform/v1/whatsapp/phone_numbers`) using `KAPSO_API_KEY`.
  */
-export async function resolveKapsoPhoneNumber(): Promise<ResolvedKapsoNumber> {
+export async function resolveKapsoPhoneNumber(options?: {
+  enrichFromPlatform?: boolean;
+}): Promise<ResolvedKapsoNumber> {
   const apiKey = process.env.KAPSO_API_KEY?.trim();
   if (!apiKey) {
     throw new Error(
@@ -103,7 +115,14 @@ export async function resolveKapsoPhoneNumber(): Promise<ResolvedKapsoNumber> {
     process.env.WHATSAPP_PHONE_NUMBER_ID?.trim() ||
     "";
 
-  if (explicitPhoneNumberId) {
+  if (explicitPhoneNumberId && !options?.enrichFromPlatform) {
+    if (
+      cachedKapsoNumber &&
+      cachedKapsoNumber.expiresAt > Date.now() &&
+      cachedKapsoNumber.value.phoneNumberId === explicitPhoneNumberId
+    ) {
+      return cachedKapsoNumber.value;
+    }
     return {
       phoneNumberId: explicitPhoneNumberId,
       displayPhoneNumber: null,
@@ -114,24 +133,52 @@ export async function resolveKapsoPhoneNumber(): Promise<ResolvedKapsoNumber> {
   }
 
   if (cachedKapsoNumber && cachedKapsoNumber.expiresAt > Date.now()) {
-    return cachedKapsoNumber.value;
+    if (
+      !explicitPhoneNumberId ||
+      cachedKapsoNumber.value.phoneNumberId === explicitPhoneNumberId
+    ) {
+      return cachedKapsoNumber.value;
+    }
   }
 
   const status = getKapsoConfigStatus();
   const platformOrigin = getKapsoPlatformOrigin(status.baseUrl);
   const url = `${platformOrigin}/platform/v1/whatsapp/phone_numbers`;
 
-  const res = await fetch(url, {
-    method: "GET",
-    headers: {
-      "X-API-Key": apiKey,
-      Accept: "application/json",
-    },
-    redirect: "error",
-    signal: AbortSignal.timeout(10000),
-  });
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "GET",
+      headers: {
+        "X-API-Key": apiKey,
+        Accept: "application/json",
+      },
+      redirect: "error",
+      signal: AbortSignal.timeout(10000),
+    });
+  } catch (err) {
+    if (explicitPhoneNumberId) {
+      return {
+        phoneNumberId: explicitPhoneNumberId,
+        displayPhoneNumber: null,
+        businessAccountId: null,
+        name: null,
+        source: "env",
+      };
+    }
+    throw err;
+  }
 
   if (!res.ok) {
+    if (explicitPhoneNumberId) {
+      return {
+        phoneNumberId: explicitPhoneNumberId,
+        displayPhoneNumber: null,
+        businessAccountId: null,
+        name: null,
+        source: "env",
+      };
+    }
     const errText = await res.text().catch(() => "");
     throw new Error(
       `Kapso Platform API (/platform/v1/whatsapp/phone_numbers) returned HTTP ${res.status}: ${errText.slice(0, 220)}`
@@ -139,7 +186,7 @@ export async function resolveKapsoPhoneNumber(): Promise<ResolvedKapsoNumber> {
   }
 
   const payload = (await res.json().catch(() => ({}))) as Record<string, any>;
-  const list = Array.isArray(payload?.data)
+  const list: Array<Record<string, any>> = Array.isArray(payload?.data)
     ? payload.data
     : Array.isArray(payload?.data?.data)
       ? payload.data.data
@@ -147,10 +194,17 @@ export async function resolveKapsoPhoneNumber(): Promise<ResolvedKapsoNumber> {
         ? payload.phone_numbers
         : [];
 
-  const first = list[0];
-  const resolvedId = String(
-    first?.phone_number_id || first?.id || ""
-  ).trim();
+  const matched = explicitPhoneNumberId
+    ? list.find(
+        (item) =>
+          String(item?.phone_number_id || item?.id || "").trim() ===
+          explicitPhoneNumberId
+      ) ?? list[0]
+    : list[0];
+
+  const resolvedId =
+    explicitPhoneNumberId ||
+    String(matched?.phone_number_id || matched?.id || "").trim();
 
   if (!resolvedId) {
     throw new Error(
@@ -160,10 +214,10 @@ export async function resolveKapsoPhoneNumber(): Promise<ResolvedKapsoNumber> {
 
   const resolved: ResolvedKapsoNumber = {
     phoneNumberId: resolvedId,
-    displayPhoneNumber: first?.display_phone_number ?? null,
-    businessAccountId: first?.business_account_id ?? null,
-    name: first?.name ?? first?.verified_name ?? null,
-    source: "platform_api",
+    displayPhoneNumber: matched?.display_phone_number ?? null,
+    businessAccountId: matched?.business_account_id ?? null,
+    name: matched?.name ?? matched?.verified_name ?? null,
+    source: explicitPhoneNumberId ? "env" : "platform_api",
   };
 
   cachedKapsoNumber = {
@@ -284,6 +338,161 @@ export async function sendKapsoTemplateMessage(params: {
       },
     },
   });
+}
+
+export interface KapsoTemplateSummary {
+  name: string;
+  language: string;
+  status: string;
+  category: string;
+  hasParameters: boolean;
+}
+
+/**
+ * Lists approved non-`hello_world` templates on the connected WhatsApp Business Account (WABA).
+ * Meta blocks `hello_world` (#131058) on real dedicated WhatsApp Business numbers.
+ */
+export async function listApprovedKapsoTemplates(
+  businessAccountId?: string | null
+): Promise<KapsoTemplateSummary[]> {
+  const apiKey = process.env.KAPSO_API_KEY?.trim();
+  if (!apiKey) return [];
+
+  let wabaId = businessAccountId?.trim() || "";
+  if (!wabaId) {
+    const resolved = await resolveKapsoPhoneNumber({
+      enrichFromPlatform: true,
+    }).catch(() => null);
+    wabaId = resolved?.businessAccountId?.trim() || "";
+  }
+  if (!wabaId) return [];
+
+  const status = getKapsoConfigStatus();
+  const graphVersion = process.env.META_GRAPH_VERSION?.trim() || "v24.0";
+  const url = `${status.baseUrl}/${encodeURIComponent(graphVersion)}/${encodeURIComponent(wabaId)}/message_templates?status=APPROVED&limit=25`;
+
+  try {
+    const res = await fetch(url, {
+      method: "GET",
+      headers: {
+        "X-API-Key": apiKey,
+        Accept: "application/json",
+      },
+      redirect: "error",
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return [];
+
+    const payload = (await res.json().catch(() => ({}))) as Record<string, any>;
+    const items: Array<Record<string, any>> = Array.isArray(payload?.data)
+      ? payload.data
+      : [];
+
+    return items
+      .filter(
+        (t) =>
+          typeof t?.name === "string" &&
+          t.name !== "hello_world" &&
+          String(t?.status || "").toUpperCase() === "APPROVED"
+      )
+      .map((t) => {
+        const components: Array<Record<string, any>> = Array.isArray(
+          t.components
+        )
+          ? t.components
+          : [];
+        const hasParameters = components.some((c) =>
+          /\{\{\d+\}\}/.test(String(c?.text || ""))
+        );
+        return {
+          name: String(t.name),
+          language: String(t.language || "en_US"),
+          status: String(t.status || "APPROVED"),
+          category: String(t.category || "UTILITY"),
+          hasParameters,
+        };
+      });
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Submits a parameterless UTILITY template (`ai_job_hunter_notification`) to Meta via Kapso
+ * so cold notifications outside an active 24-hour WhatsApp session window work on dedicated numbers.
+ */
+export async function createKapsoUtilityTemplate(params?: {
+  language?: "fr" | "en";
+}): Promise<{
+  id: string | null;
+  name: string;
+  language: string;
+  status: string;
+  category: string;
+}> {
+  const apiKey = process.env.KAPSO_API_KEY?.trim();
+  if (!apiKey) {
+    throw new Error("KAPSO_API_KEY is not configured.");
+  }
+
+  const resolved = await resolveKapsoPhoneNumber({ enrichFromPlatform: true });
+  if (!resolved.businessAccountId) {
+    throw new Error(
+      "Could not discover WhatsApp Business Account ID (WABA) from Kapso Platform API."
+    );
+  }
+
+  const lang = params?.language === "en" ? "en_US" : "fr";
+  const templateName =
+    lang === "en_US"
+      ? "ai_job_hunter_notification_en"
+      : "ai_job_hunter_notification";
+  const bodyText =
+    lang === "en_US"
+      ? "Hello, your AI Job Hunter workspace has new prepared job applications awaiting your review. Reply Hello to open your 24-hour interactive approval session."
+      : "Bonjour, votre espace AI Job Hunter est prêt. Répondez Bonjour à ce message pour activer la validation interactive de vos candidatures sur WhatsApp.";
+
+  const status = getKapsoConfigStatus();
+  const graphVersion = process.env.META_GRAPH_VERSION?.trim() || "v24.0";
+  const url = `${status.baseUrl}/${encodeURIComponent(graphVersion)}/${encodeURIComponent(resolved.businessAccountId)}/message_templates`;
+
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "X-API-Key": apiKey,
+      "Content-Type": "application/json",
+    },
+    redirect: "error",
+    body: JSON.stringify({
+      name: templateName,
+      language: lang,
+      category: "UTILITY",
+      components: [
+        {
+          type: "BODY",
+          text: bodyText,
+        },
+      ],
+    }),
+    signal: AbortSignal.timeout(12000),
+  });
+
+  const data = (await res.json().catch(() => ({}))) as Record<string, any>;
+  if (!res.ok) {
+    const errMsg =
+      data?.error?.message ||
+      data?.error?.error_user_msg ||
+      JSON.stringify(data).slice(0, 220);
+    throw new Error(`Meta template submission returned HTTP ${res.status}: ${errMsg}`);
+  }
+
+  return {
+    id: data?.id ? String(data.id) : null,
+    name: templateName,
+    language: lang,
+    status: String(data?.status || "PENDING"),
+    category: String(data?.category || "UTILITY"),
+  };
 }
 
 export async function sendKapsoDocumentMessage(params: {

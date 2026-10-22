@@ -169,6 +169,7 @@ export interface AiCompletionRequest {
   maxTokens?: number;
   jsonMode?: boolean;
   modelOverride?: string;
+  apiKeyOverride?: string;
   timeoutMs?: number;
 }
 

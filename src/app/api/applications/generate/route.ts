@@ -3,6 +3,7 @@ import { z } from "zod";
 import { requireAuthenticatedUser } from "@/lib/security/auth-guard";
 import { checkRateLimit } from "@/lib/security/rate-limit";
 import { generateTailoredApplicationWithAi } from "@/lib/documents/application-generator";
+import { buildVerifiedFallbackApplicationPackage } from "@/lib/documents/fallback-draft";
 import { generateCoverLetterPdfBuffer } from "@/lib/documents/cover-letter-pdf";
 import { createAdminSupabaseClient } from "@/lib/supabase/admin";
 import { AiProviderError } from "@/lib/ai/types";
@@ -73,32 +74,60 @@ export async function POST(request: NextRequest) {
     const admin = createAdminSupabaseClient();
     const userProfile = (profile ?? {}) as Partial<UserProfile>;
 
-    const generated = await generateTailoredApplicationWithAi({
-      profile: userProfile,
-      job: {
-        title: job.title,
-        company_name: job.company_name,
-        location: job.location,
-        description: job.description,
-        required_skills: job.required_skills ?? [],
-        detected_language: job.detected_language,
-      },
-      languageOverride: body.languageOverride,
-      routing: {
-        primaryProvider: (prefs?.primary_ai_provider ?? "groq") as AiProviderId,
-        primaryModel: prefs?.primary_ai_model ?? null,
-        fallbackProvider: (prefs?.fallback_ai_provider ??
-          null) as AiProviderId | null,
-        fallbackModel: prefs?.fallback_ai_model ?? null,
-        allowPaidFallback: Boolean(prefs?.allow_paid_fallback),
-      },
-      onLog: async (entry) => {
-        await admin.from("ai_generation_logs").insert({
-          user_id: user.id,
-          ...entry,
+    let generated;
+    let aiWarning: string | null = null;
+
+    try {
+      generated = await generateTailoredApplicationWithAi({
+        profile: userProfile,
+        job: {
+          title: job.title,
+          company_name: job.company_name,
+          location: job.location,
+          description: job.description,
+          required_skills: job.required_skills ?? [],
+          detected_language: job.detected_language,
+        },
+        languageOverride: body.languageOverride,
+        routing: {
+          primaryProvider: (prefs?.primary_ai_provider ?? "groq") as AiProviderId,
+          primaryModel: prefs?.primary_ai_model ?? null,
+          fallbackProvider: (prefs?.fallback_ai_provider ??
+            null) as AiProviderId | null,
+          fallbackModel: prefs?.fallback_ai_model ?? null,
+          allowPaidFallback: Boolean(prefs?.allow_paid_fallback),
+          userId: user.id,
+        },
+        onLog: async (entry) => {
+          await admin.from("ai_generation_logs").insert({
+            user_id: user.id,
+            ...entry,
+          });
+        },
+      });
+    } catch (genErr) {
+      if (
+        genErr instanceof AiProviderError &&
+        genErr.code === "MISSING_CREDENTIALS"
+      ) {
+        generated = buildVerifiedFallbackApplicationPackage({
+          profile: userProfile,
+          job: {
+            title: job.title,
+            company_name: job.company_name,
+            location: job.location,
+            description: job.description,
+            required_skills: job.required_skills ?? [],
+            detected_language: job.detected_language,
+          },
+          languageOverride: body.languageOverride,
         });
-      },
-    });
+        aiWarning =
+          "No AI API key configured yet — generated factual baseline draft from your verified CV. Add a free Groq key in Account Settings -> AI Providers to unlock full LLM tailoring.";
+      } else {
+        throw genErr;
+      }
+    }
 
     const matchRecord = Array.isArray(job.job_matches)
       ? job.job_matches[0]
@@ -242,6 +271,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       application: hydrated,
       generated,
+      aiWarning,
     });
   } catch (err) {
     if (err instanceof AiProviderError) {

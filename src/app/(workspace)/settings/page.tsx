@@ -40,6 +40,10 @@ export default function SettingsPage() {
 
   const [savingAi, setSavingAi] = useState(false);
   const [testingProvider, setTestingProvider] = useState<string | null>(null);
+  const [keyDrafts, setKeyDrafts] = useState<Record<string, string>>({});
+  const [savingKeyProvider, setSavingKeyProvider] = useState<string | null>(
+    null
+  );
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [deletingAccount, setDeletingAccount] = useState(false);
 
@@ -94,15 +98,58 @@ export default function SettingsPage() {
     }
   }
 
+  async function handleSaveProviderKey(
+    providerId: "groq" | "gemini" | "xai",
+    clearKey = false
+  ) {
+    const rawKey = clearKey ? "" : (keyDrafts[providerId] ?? "").trim();
+    if (!clearKey && !rawKey) {
+      toast.error(`Paste your ${providerId.toUpperCase()} API key first.`);
+      return;
+    }
+
+    setSavingKeyProvider(providerId);
+    try {
+      const res = await fetch("/api/ai/providers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider: providerId,
+          apiKey: rawKey,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error || "Failed to save encrypted API key.");
+        return;
+      }
+      setKeyDrafts((prev) => ({ ...prev, [providerId]: "" }));
+      if (data.providers) {
+        setProviders(data.providers);
+      } else {
+        await loadAiSettings();
+      }
+      toast.success(
+        clearKey
+          ? `Removed stored ${providerId.toUpperCase()} key.`
+          : `${providerId.toUpperCase()} API key encrypted & saved (${data.keyHint})!`
+      );
+    } finally {
+      setSavingKeyProvider(null);
+    }
+  }
+
   async function handleTestProvider(providerId: "groq" | "gemini" | "xai") {
     setTestingProvider(providerId);
     try {
+      const unsavedDraft = (keyDrafts[providerId] ?? "").trim();
       const res = await fetch("/api/ai/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           provider: providerId,
           model: providerId === primaryProvider ? primaryModel : undefined,
+          apiKey: unsavedDraft || undefined,
         }),
       });
       const data = await res.json();
@@ -178,35 +225,100 @@ export default function SettingsPage() {
                 key={p.id}
                 className="rounded-xl border p-4 flex flex-col justify-between gap-3 text-xs"
               >
-                <div className="space-y-1">
+                <div className="space-y-1.5">
                   <div className="flex items-center justify-between gap-2">
                     <span className="font-semibold text-sm">
                       {p.name || p.id.toUpperCase()}
                     </span>
-                    {p.configured ? (
-                      <Badge variant="success">Key Configured</Badge>
+                    {p.hasUserKey ? (
+                      <Badge variant="success">
+                        Encrypted Key ({p.keyHint})
+                      </Badge>
+                    ) : p.configured ? (
+                      <Badge variant="success">Server Key Active</Badge>
                     ) : (
-                      <Badge variant="warning">Missing Env Key</Badge>
+                      <Badge variant="warning">Missing API Key</Badge>
                     )}
                   </div>
                   <p className="text-muted-foreground">
                     Default model: <code>{p.defaultModel}</code>
                   </p>
+                  {p.docsUrl ? (
+                    <a
+                      href={p.docsUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-1 text-[11px] font-medium text-blue-600 dark:text-blue-400 hover:underline"
+                    >
+                      Get {p.id === "groq" ? "free Groq" : p.name} API key
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  ) : null}
                 </div>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  disabled={testingProvider === p.id}
-                  onClick={() => handleTestProvider(p.id)}
-                >
-                  {testingProvider === p.id ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <Zap className="h-3.5 w-3.5" />
-                  )}
-                  Test Connection
-                </Button>
+
+                <div className="space-y-2 border-t pt-2.5">
+                  <Input
+                    type="password"
+                    autoComplete="off"
+                    value={keyDrafts[p.id] ?? ""}
+                    onChange={(e) =>
+                      setKeyDrafts((prev) => ({
+                        ...prev,
+                        [p.id]: e.target.value,
+                      }))
+                    }
+                    placeholder={
+                      p.hasUserKey
+                        ? `Replace stored key (${p.keyHint})...`
+                        : `Paste ${p.envKeyName || `${p.id.toUpperCase()}_API_KEY`}...`
+                    }
+                    className="h-8 text-xs font-mono"
+                  />
+                  <div className="flex flex-wrap gap-1.5">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="secondary"
+                      className="flex-1 h-8 text-xs"
+                      disabled={savingKeyProvider === p.id}
+                      onClick={() => handleSaveProviderKey(p.id, false)}
+                    >
+                      {savingKeyProvider === p.id ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Save className="h-3.5 w-3.5" />
+                      )}
+                      Save Encrypted Key
+                    </Button>
+                    {p.hasUserKey ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="h-8 px-2 text-xs text-red-600"
+                        disabled={savingKeyProvider === p.id}
+                        onClick={() => handleSaveProviderKey(p.id, true)}
+                      >
+                        Clear
+                      </Button>
+                    ) : null}
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="w-full h-8 text-xs"
+                    disabled={testingProvider === p.id}
+                    onClick={() => handleTestProvider(p.id)}
+                  >
+                    {testingProvider === p.id ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Zap className="h-3.5 w-3.5" />
+                    )}
+                    Test Connection
+                  </Button>
+                </div>
               </div>
             ))}
           </div>

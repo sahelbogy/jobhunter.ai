@@ -3,8 +3,10 @@ import { z } from "zod";
 import { requireAuthenticatedUser } from "@/lib/security/auth-guard";
 import { createAdminSupabaseClient } from "@/lib/supabase/admin";
 import {
+  buildKapsoWaMeLink,
   dispatchApplicationToWhatsAppForApproval,
   getKapsoConfigStatus,
+  listApprovedKapsoTemplates,
   normalizeWhatsAppPhone,
   resolveKapsoPhoneNumber,
   sendKapsoTemplateMessage,
@@ -25,14 +27,28 @@ export async function GET() {
 
   const kapso = getKapsoConfigStatus();
   let connectedNumber = null;
+  let approvedTemplates: Awaited<ReturnType<typeof listApprovedKapsoTemplates>> =
+    [];
 
   if (kapso.configured) {
-    connectedNumber = await resolveKapsoPhoneNumber().catch(() => null);
+    connectedNumber = await resolveKapsoPhoneNumber({
+      enrichFromPlatform: true,
+    }).catch(() => null);
+    if (connectedNumber?.businessAccountId) {
+      approvedTemplates = await listApprovedKapsoTemplates(
+        connectedNumber.businessAccountId
+      );
+    }
   }
 
   return NextResponse.json({
     kapso,
     connectedNumber,
+    waMeLink: buildKapsoWaMeLink(
+      connectedNumber?.displayPhoneNumber,
+      "Bonjour"
+    ),
+    approvedTemplates,
   });
 }
 
@@ -56,18 +72,25 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const [{ data: settings }, { data: profile }] = await Promise.all([
-      supabase
-        .from("automation_settings")
-        .select("whatsapp_phone_number")
-        .eq("user_id", user.id)
-        .maybeSingle(),
-      supabase
-        .from("profiles")
-        .select("phone")
-        .eq("id", user.id)
-        .maybeSingle(),
-    ]);
+    const [{ data: settings }, { data: profile }, connectedNumber] =
+      await Promise.all([
+        supabase
+          .from("automation_settings")
+          .select("whatsapp_phone_number")
+          .eq("user_id", user.id)
+          .maybeSingle(),
+        supabase
+          .from("profiles")
+          .select("phone")
+          .eq("id", user.id)
+          .maybeSingle(),
+        resolveKapsoPhoneNumber({ enrichFromPlatform: true }).catch(() => null),
+      ]);
+
+    const waMeLink = buildKapsoWaMeLink(
+      connectedNumber?.displayPhoneNumber,
+      "Bonjour"
+    );
 
     const rawPhone =
       body.phone?.trim() ||
@@ -101,6 +124,7 @@ export async function POST(request: NextRequest) {
           {
             error:
               dispatchRes.reason || "Could not dispatch WhatsApp approval.",
+            waMeLink,
           },
           { status: 400 }
         );
@@ -109,15 +133,27 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({
         ok: true,
         mode: "application_approval",
+        waMeLink,
         ...dispatchRes,
       });
     }
 
     if (body.messageType === "template") {
+      if (!body.templateName || body.templateName === "hello_world") {
+        return NextResponse.json(
+          {
+            error:
+              "Meta blocks the `hello_world` template (#131058) on real dedicated WhatsApp Business numbers. Open a 24h session window or create a custom UTILITY template first.",
+            waMeLink,
+          },
+          { status: 400 }
+        );
+      }
+
       const tplSent = await sendKapsoTemplateMessage({
         to: normalizedPhone,
-        templateName: body.templateName || "hello_world",
-        languageCode: body.languageCode || "en_US",
+        templateName: body.templateName,
+        languageCode: body.languageCode || "fr",
       });
 
       return NextResponse.json({
@@ -125,8 +161,13 @@ export async function POST(request: NextRequest) {
         mode: "template_message",
         deliveryKind: "template",
         phone: `+${normalizedPhone}`,
-        senderPhoneNumberId: tplSent.phoneNumberId ?? null,
-        senderDisplayPhone: tplSent.displayPhoneNumber ?? null,
+        senderPhoneNumberId:
+          tplSent.phoneNumberId ?? connectedNumber?.phoneNumberId ?? null,
+        senderDisplayPhone:
+          tplSent.displayPhoneNumber ??
+          connectedNumber?.displayPhoneNumber ??
+          null,
+        waMeLink,
         messageId: tplSent.messageId,
       });
     }
@@ -142,31 +183,79 @@ export async function POST(request: NextRequest) {
         mode: "connection_test",
         deliveryKind: "text",
         phone: `+${normalizedPhone}`,
-        senderPhoneNumberId: testSent.phoneNumberId ?? null,
-        senderDisplayPhone: testSent.displayPhoneNumber ?? null,
+        senderPhoneNumberId:
+          testSent.phoneNumberId ?? connectedNumber?.phoneNumberId ?? null,
+        senderDisplayPhone:
+          testSent.displayPhoneNumber ??
+          connectedNumber?.displayPhoneNumber ??
+          null,
+        waMeLink,
         messageId: testSent.messageId,
       });
     } catch (textErr) {
-      if (body.messageType === "text") {
-        throw textErr;
-      }
-      // Outside an active 24h WhatsApp customer service window, automatically try `hello_world` template
-      const tplFallback = await sendKapsoTemplateMessage({
-        to: normalizedPhone,
-        templateName: body.templateName || "hello_world",
-        languageCode: body.languageCode || "en_US",
-      });
+      const primaryReason =
+        textErr instanceof Error ? textErr.message : String(textErr);
 
-      return NextResponse.json({
-        ok: true,
-        mode: "connection_test",
-        deliveryKind: "template_fallback",
-        phone: `+${normalizedPhone}`,
-        senderPhoneNumberId: tplFallback.phoneNumberId ?? null,
-        senderDisplayPhone: tplFallback.displayPhoneNumber ?? null,
-        messageId: tplFallback.messageId,
-        note: "Sent pre-approved template (`hello_world`) because no 24h inbound WhatsApp window was open yet. Reply 'Bonjour' to that message on WhatsApp to open the 24h interactive window.",
-      });
+      if (body.messageType === "text") {
+        return NextResponse.json(
+          {
+            error: primaryReason,
+            requiresSessionWindow: true,
+            waMeLink,
+            connectedNumber,
+          },
+          { status: 409 }
+        );
+      }
+
+      // Check if an APPROVED custom WABA template (never `hello_world`) exists on this dedicated number
+      const approvedTemplates = await listApprovedKapsoTemplates(
+        connectedNumber?.businessAccountId
+      );
+      const parameterlessTemplate = approvedTemplates.find(
+        (t) => !t.hasParameters
+      );
+
+      if (parameterlessTemplate) {
+        const tplFallback = await sendKapsoTemplateMessage({
+          to: normalizedPhone,
+          templateName: parameterlessTemplate.name,
+          languageCode: parameterlessTemplate.language,
+        });
+
+        return NextResponse.json({
+          ok: true,
+          mode: "connection_test",
+          deliveryKind: "approved_utility_template",
+          templateUsed: parameterlessTemplate.name,
+          phone: `+${normalizedPhone}`,
+          senderPhoneNumberId:
+            tplFallback.phoneNumberId ?? connectedNumber?.phoneNumberId ?? null,
+          senderDisplayPhone:
+            tplFallback.displayPhoneNumber ??
+            connectedNumber?.displayPhoneNumber ??
+            null,
+          waMeLink,
+          messageId: tplFallback.messageId,
+          note: `Modèle approuvé « ${parameterlessTemplate.name} » envoyé ! Répondez « Bonjour » à ce message sur WhatsApp pour activer les boutons interactifs 24h.`,
+        });
+      }
+
+      const senderLabel =
+        connectedNumber?.displayPhoneNumber ||
+        connectedNumber?.phoneNumberId ||
+        "votre numéro Kapso";
+
+      return NextResponse.json(
+        {
+          requiresSessionWindow: true,
+          waMeLink,
+          connectedNumber,
+          upstreamReason: primaryReason,
+          error: `Fenêtre WhatsApp 24h non ouverte entre +${normalizedPhone} et ${senderLabel}. Sur un vrai numéro WhatsApp Business dédié, Meta exige soit que vous envoyiez d'abord « Bonjour » au numéro Kapso (1 clic ci-dessous), soit un modèle Utility approuvé.`,
+        },
+        { status: 409 }
+      );
     }
   } catch (err) {
     return NextResponse.json(

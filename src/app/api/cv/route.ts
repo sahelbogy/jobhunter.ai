@@ -114,6 +114,7 @@ export async function POST(request: NextRequest) {
           null) as AiProviderId | null,
         fallbackModel: prefs?.fallback_ai_model ?? null,
         allowPaidFallback: Boolean(prefs?.allow_paid_fallback),
+        userId: user.id,
       },
       onLog: async (entry) => {
         await admin.from("ai_generation_logs").insert({

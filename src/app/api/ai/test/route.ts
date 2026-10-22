@@ -9,6 +9,7 @@ import { createAdminSupabaseClient } from "@/lib/supabase/admin";
 const TestSchema = z.object({
   provider: z.enum(["groq", "gemini", "xai"]),
   model: z.string().max(120).optional(),
+  apiKey: z.string().max(400).optional(),
 });
 
 export async function POST(request: NextRequest) {
@@ -31,6 +32,8 @@ export async function POST(request: NextRequest) {
     const result = await testAiProviderConnection({
       provider: body.provider,
       model: body.model,
+      userId: user.id,
+      apiKeyOverride: body.apiKey?.trim() || undefined,
       onLog: async (entry) => {
         await admin.from("ai_generation_logs").insert({
           user_id: user.id,

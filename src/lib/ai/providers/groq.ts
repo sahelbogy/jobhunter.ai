@@ -10,13 +10,14 @@ const GROQ_FREE_REPLACEMENT_MODEL = "openai/gpt-oss-120b";
 export async function callGroqProvider(
   req: AiCompletionRequest
 ): Promise<AiCompletionResponse> {
-  const apiKey = process.env.GROQ_API_KEY?.trim();
+  const apiKey =
+    req.apiKeyOverride?.trim() || process.env.GROQ_API_KEY?.trim();
   if (!apiKey) {
     throw new AiProviderError({
       provider: "groq",
       code: "MISSING_CREDENTIALS",
       message:
-        "GROQ_API_KEY is not configured on the server. Add your Groq API key in environment variables or switch to a configured provider.",
+        "GROQ_API_KEY is not configured. Paste a free Groq API key in Account Settings -> AI Providers (console.groq.com/keys) or set GROQ_API_KEY in Vercel environment variables.",
       retryable: false,
     });
   }

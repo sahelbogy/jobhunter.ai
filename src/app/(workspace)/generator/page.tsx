@@ -113,6 +113,9 @@ function GeneratorInner() {
           data.generated.fallback_used ? " • Fallback" : ""
         }`
       );
+      if (data.aiWarning) {
+        setAiConfigWarning(data.aiWarning);
+      }
       toast.success(
         `Generated ${app.language === "fr" ? "French" : "English"} email & PDF cover letter!`
       );
