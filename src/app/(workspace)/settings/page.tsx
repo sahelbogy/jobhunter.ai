@@ -31,7 +31,7 @@ export default function SettingsPage() {
   const [primaryProvider, setPrimaryProvider] = useState<
     "groq" | "gemini" | "xai"
   >("groq");
-  const [primaryModel, setPrimaryModel] = useState("llama-3.3-70b-versatile");
+  const [primaryModel, setPrimaryModel] = useState("openai/gpt-oss-120b");
   const [fallbackProvider, setFallbackProvider] = useState<
     "groq" | "gemini" | "xai" | "none"
   >("none");
@@ -54,8 +54,11 @@ export default function SettingsPage() {
       setProviders(d.providers ?? []);
       if (d.preferences) {
         setPrimaryProvider(d.preferences.primary_ai_provider ?? "groq");
+        const savedModel = d.preferences.primary_ai_model;
         setPrimaryModel(
-          d.preferences.primary_ai_model ?? "llama-3.3-70b-versatile"
+          !savedModel || savedModel === "llama-3.3-70b-versatile"
+            ? "openai/gpt-oss-120b"
+            : savedModel
         );
         setFallbackProvider(d.preferences.fallback_ai_provider ?? "none");
         setAllowPaidFallback(Boolean(d.preferences.allow_paid_fallback));

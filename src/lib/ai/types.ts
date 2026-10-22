@@ -57,37 +57,33 @@ export const AI_PROVIDER_CATALOG: Record<AiProviderId, AiProviderMetadata> = {
   groq: {
     id: "groq",
     name: "Groq Cloud",
-    tierLabel: "Primary • Free Developer Tier Available",
+    tierLabel: "Primary • 100% Free Developer Tier",
     isPaidOnly: false,
     envKeyName: "GROQ_API_KEY",
     envModelName: "GROQ_MODEL",
     docsUrl: "https://console.groq.com/keys",
-    defaultModel: "llama-3.3-70b-versatile",
+    defaultModel: "openai/gpt-oss-120b",
     models: [
       {
-        id: "llama-3.3-70b-versatile",
-        label: "Llama 3.3 70B Versatile (Auto-resolves if retired)",
+        id: "openai/gpt-oss-120b",
+        label: "GPT-OSS 120B (Recommended • Free Groq Production)",
         description:
-          "Preferred versatile model; automatically resolves to GPT-OSS 120B on Groq free accounts where Llama 3.3 was retired.",
+          "Flagship 120B open-weight model (~500 tok/s, 131K context, free developer tier on Groq Cloud).",
         freeTierAvailable: true,
         recommended: true,
       },
       {
-        id: "openai/gpt-oss-120b",
-        label: "GPT-OSS 120B (Groq Production)",
-        description: "High-accuracy 120B open-weights production model on Groq Cloud.",
-        freeTierAvailable: true,
-      },
-      {
         id: "openai/gpt-oss-20b",
-        label: "GPT-OSS 20B (Ultra-Fast)",
-        description: "Low-latency production model ideal for high-volume matching.",
+        label: "GPT-OSS 20B (Ultra-Fast ~1000 tok/s • Free)",
+        description:
+          "Ultra-low-latency 20B model ideal for fast batch job matching and email generation.",
         freeTierAvailable: true,
       },
       {
-        id: "meta-llama/llama-4-scout-17b-16e-instruct",
-        label: "Llama 4 Scout 17B Instruct",
-        description: "Fast multilingual instruction model (FR/EN).",
+        id: "qwen/qwen3.8-27b",
+        label: "Qwen 3.8 27B (Multilingual FR/EN • Free)",
+        description:
+          "Strong bilingual French/English 27B model available on Groq Cloud free tier.",
         freeTierAvailable: true,
       },
     ],

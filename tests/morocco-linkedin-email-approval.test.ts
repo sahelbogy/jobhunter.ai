@@ -427,31 +427,80 @@ describe("Cryptographic Email Approval Loop & Encrypted SMTP Transport", () => {
     expect(sendEmailFn).not.toHaveBeenCalled();
   });
 
-  it("uses encrypted per-user apiKeyOverride in callGroqProvider even when server GROQ_API_KEY is unset", async () => {
+  it("uses encrypted per-user apiKeyOverride in callGroqProvider with GPT-OSS 120B reasoning controls and recovers from json_validate_failed", async () => {
     const prevGroq = process.env.GROQ_API_KEY;
     delete process.env.GROQ_API_KEY;
 
+    const capturedBodies: Record<string, any>[] = [];
+    let attempt = 0;
+
     const fetchMock = vi
       .spyOn(globalThis, "fetch")
-      .mockResolvedValue(
-        new Response(
+      .mockImplementation(async (_input, init) => {
+        attempt += 1;
+        const body = JSON.parse(String(init?.body ?? "{}"));
+        capturedBodies.push(body);
+
+        if (attempt === 1) {
+          // Simulate Groq HTTP 400 json_validate_failed with empty failed_generation
+          return new Response(
+            JSON.stringify({
+              error: {
+                message:
+                  "Failed to validate JSON. Please adjust your prompt. See 'failed_generation' for more details.",
+                type: "invalid_request_error",
+                code: "json_validate_failed",
+                failed_generation: "",
+              },
+            }),
+            { status: 400, headers: { "Content-Type": "application/json" } }
+          );
+        }
+
+        return new Response(
           JSON.stringify({
-            model: "llama-3.3-70b-versatile",
-            choices: [{ message: { content: '{"ok":true}' } }],
-            usage: { prompt_tokens: 12, completion_tokens: 5 },
+            model: "openai/gpt-oss-120b",
+            choices: [
+              { message: { content: '{"ok":true,"message":"Connected"}' } },
+            ],
+            usage: { prompt_tokens: 24, completion_tokens: 18 },
           }),
           { status: 200, headers: { "Content-Type": "application/json" } }
-        )
-      );
+        );
+      });
 
     try {
       const res = await callGroqProvider({
-        systemPrompt: "Test",
+        systemPrompt: "Diagnostic check",
         userPrompt: "Ping",
+        maxTokens: 60,
+        jsonMode: true,
+        modelOverride: "llama-3.3-70b-versatile",
         apiKeyOverride: "gsk_user_encrypted_override_test_key",
       });
+
       expect(res.provider).toBe("groq");
-      expect(res.content).toBe('{"ok":true}');
+      expect(res.model).toBe("openai/gpt-oss-120b");
+      expect(res.content).toBe('{"ok":true,"message":"Connected"}');
+
+      // Attempt 1 normalized llama-3.3-70b-versatile -> openai/gpt-oss-120b,
+      // disabled include_reasoning, set reasoning_effort="low", and raised max_completion_tokens >= 2048
+      expect(capturedBodies[0]?.model).toBe("openai/gpt-oss-120b");
+      expect(capturedBodies[0]?.include_reasoning).toBe(false);
+      expect(capturedBodies[0]?.reasoning_effort).toBe("low");
+      expect(capturedBodies[0]?.reasoning_format).toBeUndefined();
+      expect(capturedBodies[0]?.max_completion_tokens).toBeGreaterThanOrEqual(
+        2048
+      );
+      expect(capturedBodies[0]?.response_format).toEqual({
+        type: "json_object",
+      });
+
+      // Attempt 2 automatically dropped response_format and raised max_completion_tokens >= 4096
+      expect(capturedBodies[1]?.response_format).toBeUndefined();
+      expect(capturedBodies[1]?.max_completion_tokens).toBeGreaterThanOrEqual(
+        4096
+      );
     } finally {
       fetchMock.mockRestore();
       if (prevGroq !== undefined) process.env.GROQ_API_KEY = prevGroq;

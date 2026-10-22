@@ -48,7 +48,7 @@ export function getServerEnvStatus(): ServerEnvStatus {
     supabaseConfigured: Boolean(pub.supabaseUrl && pub.supabasePublishableKey),
     serviceRoleConfigured: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY?.trim()),
     groqConfigured: Boolean(process.env.GROQ_API_KEY?.trim()),
-    groqModel: process.env.GROQ_MODEL?.trim() || "llama-3.3-70b-versatile",
+    groqModel: process.env.GROQ_MODEL?.trim() || "openai/gpt-oss-120b",
     geminiConfigured: Boolean(process.env.GEMINI_API_KEY?.trim()),
     geminiModel: process.env.GEMINI_MODEL?.trim() || "gemini-3.5-flash-lite",
     xaiConfigured: Boolean(process.env.XAI_API_KEY?.trim()),

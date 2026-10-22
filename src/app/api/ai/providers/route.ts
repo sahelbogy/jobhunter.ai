@@ -51,9 +51,9 @@ export async function GET() {
     providers: getAiProvidersStatus(userSecrets),
     preferences: prefs ?? {
       primary_ai_provider: "groq",
-      primary_ai_model: "llama-3.3-70b-versatile",
-      fallback_ai_provider: null,
-      fallback_ai_model: null,
+      primary_ai_model: "openai/gpt-oss-120b",
+      fallback_ai_provider: "gemini",
+      fallback_ai_model: "gemini-3.5-flash-lite",
       allow_paid_fallback: false,
     },
     recentLogs: recentLogs ?? [],

@@ -103,6 +103,17 @@ async function executeGeminiCall(
       return executeGeminiCall(apiKey, "gemini-3.5-flash-lite", req, false);
     }
 
+    // If gemini-3.5-flash-lite experiences a transient 503 high-demand spike,
+    // retry once on gemini-3.1-flash-lite after a brief pause.
+    if (
+      allowRetiredRetry &&
+      response.status === 503 &&
+      model === "gemini-3.5-flash-lite"
+    ) {
+      await new Promise((r) => setTimeout(r, 700));
+      return executeGeminiCall(apiKey, "gemini-3.1-flash-lite", req, false);
+    }
+
     if (
       response.status === 401 ||
       response.status === 403 ||

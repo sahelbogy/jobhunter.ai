@@ -321,15 +321,18 @@ export async function testAiProviderConnection(params: {
 
   const res = await dispatchToProvider(params.provider, {
     systemPrompt:
-      "You are a connectivity diagnostic service. Reply strictly with valid JSON: {\"ok\": true, \"message\": \"Connected\"}.",
-    userPrompt: "Verify API connectivity now.",
+      'You are an API connectivity check. Output ONLY this exact JSON object: {"ok":true,"message":"Connected"}',
+    userPrompt: 'Return the JSON object {"ok":true,"message":"Connected"} now.',
     temperature: 0,
-    maxTokens: 60,
+    maxTokens: 1024,
     jsonMode: true,
     modelOverride: params.model,
     apiKeyOverride: params.apiKeyOverride || userKeys[params.provider],
-    timeoutMs: 15000,
+    timeoutMs: 20000,
   });
+
+  // Verify response actually contains valid extractable JSON
+  extractJsonObject(res.content);
 
   if (params.onLog) {
     await params
