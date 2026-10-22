@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { requireAuthenticatedUser } from "@/lib/security/auth-guard";
+import { matchesSelectedLocations } from "@/lib/jobs/location-filter";
 
 export async function GET(request: NextRequest) {
   const auth = await requireAuthenticatedUser();
@@ -14,6 +15,13 @@ export async function GET(request: NextRequest) {
   const lang = searchParams.get("language") ?? "all";
   const savedOnly = searchParams.get("saved") === "true";
   const minScore = Number(searchParams.get("minScore") ?? 0);
+  const locationsParam = searchParams.get("locations")?.trim() ?? "";
+  const selectedLocations = locationsParam
+    ? locationsParam
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : [];
 
   let query = supabase
     .from("jobs")
@@ -66,6 +74,12 @@ export async function GET(request: NextRequest) {
       return { ...rest, match };
     })
     .filter((job) => {
+      if (
+        selectedLocations.length > 0 &&
+        !matchesSelectedLocations(job, selectedLocations)
+      ) {
+        return false;
+      }
       if (minScore > 0 && (job.match?.match_score ?? 0) < minScore) {
         return false;
       }

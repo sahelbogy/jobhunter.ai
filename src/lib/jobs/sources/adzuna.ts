@@ -47,13 +47,22 @@ export async function fetchAdzunaJobs(params: {
     };
   }
 
+  const explicitLocations = (params.locations ?? [])
+    .map((l) => l.trim())
+    .filter(Boolean);
   const requestedCountries = new Set<string>();
-  for (const loc of params.locations ?? ["fr"]) {
-    const mapped = ADZUNA_COUNTRY_MAP[loc.trim().toLowerCase()];
+  for (const loc of explicitLocations.length > 0 ? explicitLocations : ["fr"]) {
+    const mapped = ADZUNA_COUNTRY_MAP[loc.toLowerCase()];
     if (mapped) requestedCountries.add(mapped.code);
   }
   if (requestedCountries.size === 0) {
-    requestedCountries.add("fr");
+    return {
+      source: "adzuna",
+      status: "ok",
+      jobs: [],
+      message:
+        "Adzuna has no regional endpoint for the selected country (e.g. Morocco); using authorized Morocco ATS feeds.",
+    };
   }
 
   const perCountry = Math.min(Math.max(params.limit ?? 15, 5), 25);

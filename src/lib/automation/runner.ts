@@ -4,6 +4,12 @@ import type { AiProviderId, UserProfile } from "@/types/domain";
 import { runJobDiscoveryForUser } from "@/lib/jobs/discovery";
 import { generateTailoredApplicationWithAi } from "@/lib/documents/application-generator";
 import { generateCoverLetterPdfBuffer } from "@/lib/documents/cover-letter-pdf";
+import {
+  dispatchApplicationToWhatsAppForApproval,
+  normalizeWhatsAppPhone,
+  type DispatchWhatsAppApprovalResult,
+} from "@/lib/whatsapp/kapso";
+import { buildVerifiedFallbackApplicationPackage } from "@/lib/documents/fallback-draft";
 
 export interface AutomationRunSummary {
   runId: string;
@@ -192,10 +198,45 @@ export async function executeAutomationRunForUser(params: {
       `${qualifiedJobs.length} opportunities met minimum match threshold (${minScore}%).`
     );
 
-    // 5. Generate drafts for top un-applied matches (NEVER auto-sends!)
+    // 5. Generate drafts for top un-applied matches (NEVER auto-sends without human approval!)
     let draftsGenerated = 0;
+    let whatsappApprovalsSent = 0;
+    const whatsappEnabled = Boolean(settings?.whatsapp_enabled);
+    const whatsappPhone = normalizeWhatsAppPhone(
+      settings?.whatsapp_phone_number ?? ""
+    );
+
+    // 5a. First dispatch any pre-scheduled batch applications due today (`scheduled_for_date <= today`)
+    const todayUtc = new Date().toISOString().slice(0, 10);
+    if (whatsappEnabled && whatsappPhone) {
+      const { data: dueScheduledApps } = await adminSupabase
+        .from("applications")
+        .select("id, job_title, company_name")
+        .eq("user_id", userId)
+        .eq("approval_status", "awaiting_approval")
+        .is("whatsapp_notified_at", null)
+        .not("scheduled_for_date", "is", null)
+        .lte("scheduled_for_date", todayUtc)
+        .limit(10);
+
+      for (const dueApp of dueScheduledApps ?? []) {
+        const waRes = await dispatchApplicationToWhatsAppForApproval({
+          adminSupabase,
+          userId,
+          applicationId: dueApp.id,
+          whatsappPhone,
+        }).catch(() => ({ dispatched: false, reason: "Kapso error" }));
+        if (waRes.dispatched) {
+          whatsappApprovalsSent += 1;
+          log(
+            `Sent due scheduled application '${dueApp.job_title}' (${dueApp.company_name}) to WhatsApp via Kapso.`
+          );
+        }
+      }
+    }
+
     const maxDrafts = settings?.auto_generate_drafts
-      ? Math.min(Number(settings?.max_drafts_per_run ?? 3), 5)
+      ? Math.min(Number(settings?.max_drafts_per_run ?? 5), 10)
       : 0;
 
     if (maxDrafts > 0 && qualifiedJobs.length > 0) {
@@ -213,35 +254,51 @@ export async function executeAutomationRunForUser(params: {
 
       for (const targetJob of targets) {
         try {
-          const generated = await generateTailoredApplicationWithAi({
-            profile: userProfile,
-            job: {
-              title: targetJob.title,
-              company_name: targetJob.company_name,
-              location: targetJob.location,
-              description: targetJob.description,
-              required_skills: targetJob.required_skills ?? [],
-              detected_language: targetJob.detected_language,
-            },
-            languageOverride: settings?.email_language ?? "auto",
-            routing: {
-              primaryProvider: (settings?.ai_provider ??
-                prefs?.primary_ai_provider ??
-                "groq") as AiProviderId,
-              primaryModel: prefs?.primary_ai_model ?? null,
-              fallbackProvider: (settings?.fallback_ai_provider ??
-                prefs?.fallback_ai_provider ??
-                null) as AiProviderId | null,
-              fallbackModel: prefs?.fallback_ai_model ?? null,
-              allowPaidFallback: Boolean(prefs?.allow_paid_fallback),
-            },
-            onLog: async (entry) => {
-              await adminSupabase.from("ai_generation_logs").insert({
-                user_id: userId,
-                ...entry,
-              });
-            },
-          });
+          let generated;
+          try {
+            generated = await generateTailoredApplicationWithAi({
+              profile: userProfile,
+              job: {
+                title: targetJob.title,
+                company_name: targetJob.company_name,
+                location: targetJob.location,
+                description: targetJob.description,
+                required_skills: targetJob.required_skills ?? [],
+                detected_language: targetJob.detected_language,
+              },
+              languageOverride: settings?.email_language ?? "auto",
+              routing: {
+                primaryProvider: (settings?.ai_provider ??
+                  prefs?.primary_ai_provider ??
+                  "groq") as AiProviderId,
+                primaryModel: prefs?.primary_ai_model ?? null,
+                fallbackProvider: (settings?.fallback_ai_provider ??
+                  prefs?.fallback_ai_provider ??
+                  null) as AiProviderId | null,
+                fallbackModel: prefs?.fallback_ai_model ?? null,
+                allowPaidFallback: Boolean(prefs?.allow_paid_fallback),
+              },
+              onLog: async (entry) => {
+                await adminSupabase.from("ai_generation_logs").insert({
+                  user_id: userId,
+                  ...entry,
+                });
+              },
+            });
+          } catch {
+            generated = buildVerifiedFallbackApplicationPackage({
+              profile: userProfile,
+              job: {
+                title: targetJob.title,
+                company_name: targetJob.company_name,
+                location: targetJob.location,
+                description: targetJob.description,
+                required_skills: targetJob.required_skills ?? [],
+                detected_language: targetJob.detected_language,
+              },
+              languageOverride: settings?.email_language ?? "auto",
+            });
+          }
 
           const { data: createdApp } = await adminSupabase
             .from("applications")
@@ -332,6 +389,29 @@ export async function executeAutomationRunForUser(params: {
             log(
               `Queued application draft for '${targetJob.title}' at '${targetJob.company_name}' in Approval Queue.`
             );
+
+            if (whatsappEnabled && whatsappPhone) {
+              const waRes = await dispatchApplicationToWhatsAppForApproval({
+                adminSupabase,
+                userId,
+                applicationId: createdApp.id,
+                whatsappPhone,
+              }).catch(
+                (): DispatchWhatsAppApprovalResult => ({
+                  dispatched: false,
+                  reason: "Kapso error",
+                })
+              );
+
+              if (waRes.dispatched) {
+                whatsappApprovalsSent += 1;
+                log(
+                  `Dispatched WhatsApp approval card (#${waRes.approvalCode}) via Kapso for '${targetJob.title}'.`
+                );
+              } else if (waRes.reason) {
+                log(`WhatsApp dispatch skipped: ${waRes.reason}`);
+              }
+            }
           }
         } catch (draftErr) {
           log(
@@ -344,25 +424,34 @@ export async function executeAutomationRunForUser(params: {
     }
 
     // 6. Notify user when new matches or drafts are ready
-    let notificationsSent = 0;
+    let notificationsSent = whatsappApprovalsSent;
     if (
       settings?.notify_in_app !== false &&
-      (qualifiedJobs.length > 0 || draftsGenerated > 0)
+      (qualifiedJobs.length > 0 || draftsGenerated > 0 || whatsappApprovalsSent > 0)
     ) {
       await adminSupabase.from("notifications").insert({
         user_id: userId,
         title:
-          draftsGenerated > 0
-            ? `${draftsGenerated} Application Draft(s) Ready for Approval`
-            : `${qualifiedJobs.length} High-Match Job Opportunities Found`,
-        message: `Automation discovered ${discovery.insertedOrUpdatedCount} roles (${qualifiedJobs.length} scoring ${minScore}%+) and queued ${draftsGenerated} tailored draft(s) in your Approval Queue.`,
+          whatsappApprovalsSent > 0
+            ? `${whatsappApprovalsSent} Offer(s) Sent to WhatsApp for Approval`
+            : draftsGenerated > 0
+              ? `${draftsGenerated} Application Draft(s) Ready for Approval`
+              : `${qualifiedJobs.length} High-Match Job Opportunities Found`,
+        message: `Automation discovered ${discovery.insertedOrUpdatedCount} roles (${qualifiedJobs.length} scoring ${minScore}%+), queued ${draftsGenerated} tailored draft(s), and sent ${whatsappApprovalsSent} WhatsApp approval card(s).`,
         category: "automation",
         link_url: draftsGenerated > 0 ? "/approvals" : "/matching",
       });
-      notificationsSent = 1;
+      notificationsSent += 1;
     }
 
-    const nextRun = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const isCompletedSpecificDate =
+      triggerType === "scheduled" &&
+      settings?.schedule_mode === "specific_date" &&
+      settings?.scheduled_date === todayUtc;
+
+    const nextRun = isCompletedSpecificDate
+      ? null
+      : new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
     const completedAt = new Date().toISOString();
 
     await Promise.all([

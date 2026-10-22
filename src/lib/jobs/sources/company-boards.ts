@@ -9,6 +9,10 @@ import {
   extractSkillsFromJobText,
   inferJobSector,
 } from "@/lib/jobs/dedup";
+import {
+  matchesSelectedLocations,
+  parseSelectedLocations,
+} from "@/lib/jobs/location-filter";
 
 export interface CuratedCompanyBoard {
   name: string;
@@ -39,15 +43,15 @@ export const AUTHORIZED_COMPANY_BOARDS: CuratedCompanyBoard[] = [
       "European digital services group with major engineering delivery centers in Casablanca, Rabat, Oujda, Paris, Lyon, and Nantes.",
   },
   {
-    name: "Ubisoft",
+    name: "ALTEN Maroc & Group",
     provider: "smartrecruiters",
-    slug: "Ubisoft2",
-    industry: "Interactive Entertainment & Software",
-    website: "https://www.ubisoft.com",
-    careersPage: "https://careers.smartrecruiters.com/Ubisoft2",
-    regions: ["morocco", "france", "europe", "international"],
+    slug: "ALTEN",
+    industry: "Engineering, IT & R&D Consulting",
+    website: "https://www.alten.ma",
+    careersPage: "https://careers.smartrecruiters.com/ALTEN",
+    regions: ["morocco", "france", "europe"],
     description:
-      "Global software & gaming publisher operating studios across France, Europe, North America, and MENA.",
+      "Major engineering and IT services employer in Morocco (Rabat, Casablanca, Fes, Tetouan) and Europe.",
   },
   {
     name: "Devoteam",
@@ -59,6 +63,72 @@ export const AUTHORIZED_COMPANY_BOARDS: CuratedCompanyBoard[] = [
     regions: ["morocco", "france", "europe"],
     description:
       "AI-driven tech consulting firm active in Morocco (Casablanca/Rabat), France, and 20+ EMEA countries.",
+  },
+  {
+    name: "Wavestone",
+    provider: "smartrecruiters",
+    slug: "wavestone1",
+    industry: "Cybersecurity, Data & Management Consulting",
+    website: "https://www.wavestone.com",
+    careersPage: "https://careers.smartrecruiters.com/wavestone1",
+    regions: ["morocco", "france", "europe"],
+    description:
+      "Global technology and cybersecurity consultancy with active delivery hub in Casablanca, Morocco and Paris, France.",
+  },
+  {
+    name: "Inetum",
+    provider: "smartrecruiters",
+    slug: "Inetum2",
+    industry: "Digital Services & Cloud Engineering",
+    website: "https://www.inetum.com",
+    careersPage: "https://careers.smartrecruiters.com/Inetum2",
+    regions: ["morocco", "france", "europe"],
+    description:
+      "Agile IT services company hiring software engineers, consultants, and data specialists in Casablanca, Rabat, and Europe.",
+  },
+  {
+    name: "Yassir",
+    provider: "lever",
+    slug: "Yassir",
+    industry: "Super-App, FinTech & Mobility",
+    website: "https://yassir.com",
+    careersPage: "https://jobs.lever.co/Yassir",
+    regions: ["morocco", "international"],
+    description:
+      "Leading North African Mobility & FinTech technology platform actively hiring in Casablanca, Agadir, Kenitra, and Francophone Africa.",
+  },
+  {
+    name: "Theodo Morocco & Group",
+    provider: "lever",
+    slug: "theodo",
+    industry: "Full-Stack Product, AI & Cloud Engineering",
+    website: "https://www.theodo.co.uk",
+    careersPage: "https://jobs.lever.co/theodo",
+    regions: ["morocco", "france", "europe"],
+    description:
+      "Digital product and AI consultancy hiring full-stack software engineers in Casablanca (CDI) and Paris.",
+  },
+  {
+    name: "dLocal",
+    provider: "lever",
+    slug: "dlocal",
+    industry: "Global FinTech & Cross-Border Payments",
+    website: "https://dlocal.com",
+    careersPage: "https://jobs.lever.co/dlocal",
+    regions: ["morocco", "remote", "international"],
+    description:
+      "Global payments technology company operating across emerging markets including Casablanca, Morocco.",
+  },
+  {
+    name: "Ubisoft",
+    provider: "smartrecruiters",
+    slug: "Ubisoft2",
+    industry: "Interactive Entertainment & Software",
+    website: "https://www.ubisoft.com",
+    careersPage: "https://careers.smartrecruiters.com/Ubisoft2",
+    regions: ["morocco", "france", "europe", "international"],
+    description:
+      "Global software & gaming publisher operating studios across Casablanca, France, Europe, and North America.",
   },
   {
     name: "Bosch Group",
@@ -331,7 +401,16 @@ export async function probeLeverBoard(params: {
         .map((l: any) => `${l.text ?? ""}: ${l.content ?? ""}`)
         .join("\n")}`
     );
-    const location = String(j.categories?.location ?? "Europe").trim();
+    const allLocs = Array.isArray(j.categories?.allLocations)
+      ? j.categories.allLocations.join(", ")
+      : "";
+    const location = String(
+      j.categories?.location || allLocs || "Unspecified"
+    ).trim();
+    const countryCode =
+      typeof j.country === "string" && j.country.trim()
+        ? j.country.trim().toUpperCase()
+        : null;
 
     return {
       external_id: `${params.slug}:${j.id}`,
@@ -343,7 +422,7 @@ export async function probeLeverBoard(params: {
       company_ats_provider: "lever",
       company_ats_slug: params.slug,
       location,
-      country_code: null,
+      country_code: countryCode,
       is_remote:
         j.workplaceType === "remote" || /remote|t[ée]l[ée]travail/i.test(location),
       contract_type: /intern|stage/i.test(
@@ -440,56 +519,100 @@ export async function fetchAuthorizedCompanyBoardJobs(params: {
   jobs: DiscoveredJobInput[];
   boardsQueried: string[];
 }> {
-  const locLower = (params.locations ?? []).map((l) => l.toLowerCase());
-  const wantsMorocco =
-    locLower.length === 0 ||
-    locLower.some((l) =>
-      /morocco|maroc|casablanca|rabat|tanger|tangier|marrakech|ma\b/.test(l)
-    );
-  const wantsFrance =
-    locLower.length === 0 ||
-    locLower.some((l) => /france|paris|lyon|nantes|fr\b/.test(l));
-  const wantsEurope =
-    locLower.length === 0 ||
-    locLower.some((l) => /europe|eu|germany|spain|netherlands|uk/.test(l));
+  const parsedLocs = parseSelectedLocations(params.locations);
+  const wantsMorocco = !parsedLocs.hasAnyFilter || parsedLocs.wantsMorocco;
+  const wantsFrance = !parsedLocs.hasAnyFilter || parsedLocs.wantsFrance;
+  const wantsEurope = !parsedLocs.hasAnyFilter || parsedLocs.wantsEurope;
   const wantsRemote =
-    locLower.length === 0 ||
-    locLower.some((l) => /remote|international|worldwide|global/.test(l));
+    !parsedLocs.hasAnyFilter ||
+    parsedLocs.wantsRemote ||
+    parsedLocs.wantsInternational;
+
+  const isMoroccoStrictlyOnly =
+    parsedLocs.hasAnyFilter &&
+    parsedLocs.wantsMorocco &&
+    !parsedLocs.wantsFrance &&
+    !parsedLocs.wantsEurope &&
+    !parsedLocs.wantsRemote &&
+    !parsedLocs.wantsInternational;
+
+  const isFranceStrictlyOnly =
+    parsedLocs.hasAnyFilter &&
+    parsedLocs.wantsFrance &&
+    !parsedLocs.wantsMorocco &&
+    !parsedLocs.wantsEurope &&
+    !parsedLocs.wantsRemote &&
+    !parsedLocs.wantsInternational;
 
   const selectedBoards = AUTHORIZED_COMPANY_BOARDS.filter((b) => {
     if (wantsMorocco && b.regions.includes("morocco")) return true;
     if (wantsFrance && b.regions.includes("france")) return true;
     if (wantsEurope && b.regions.includes("europe")) return true;
-    if (wantsRemote && (b.regions.includes("remote") || b.regions.includes("international")))
+    if (
+      wantsRemote &&
+      (b.regions.includes("remote") || b.regions.includes("international"))
+    )
       return true;
     return false;
-  }).slice(0, 7);
+  }).slice(0, isMoroccoStrictlyOnly ? 10 : 8);
 
   const tasks = selectedBoards.map(async (board) => {
     try {
       if (board.provider === "smartrecruiters") {
-        // When user specifically targets Morocco, also query country=ma first so Moroccan postings surface directly
-        if (wantsMorocco && board.regions.includes("morocco")) {
+        if (isMoroccoStrictlyOnly) {
           const maJobs = await probeSmartRecruitersBoard({
             slug: board.slug,
             companyName: board.name,
             website: board.website,
             query: params.query,
             countryCode: "ma",
-            limit: params.limitPerBoard ?? 12,
+            limit: params.limitPerBoard ?? 20,
           });
-          if (maJobs.length > 0 && locLower.length === 1) {
+          if (maJobs.length > 0 || !params.query) {
             return maJobs;
           }
-          const generalJobs = await probeSmartRecruitersBoard({
+          // Retry Morocco-only board without narrow English/French keyword so local FR/EN Morocco titles surface
+          return await probeSmartRecruitersBoard({
+            slug: board.slug,
+            companyName: board.name,
+            website: board.website,
+            countryCode: "ma",
+            limit: params.limitPerBoard ?? 20,
+          });
+        }
+
+        if (isFranceStrictlyOnly) {
+          return await probeSmartRecruitersBoard({
             slug: board.slug,
             companyName: board.name,
             website: board.website,
             query: params.query,
-            limit: params.limitPerBoard ?? 10,
+            countryCode: "fr",
+            limit: params.limitPerBoard ?? 16,
           });
+        }
+
+        if (wantsMorocco && board.regions.includes("morocco")) {
+          const [maJobs, generalJobs] = await Promise.all([
+            probeSmartRecruitersBoard({
+              slug: board.slug,
+              companyName: board.name,
+              website: board.website,
+              query: params.query,
+              countryCode: "ma",
+              limit: params.limitPerBoard ?? 12,
+            }),
+            probeSmartRecruitersBoard({
+              slug: board.slug,
+              companyName: board.name,
+              website: board.website,
+              query: params.query,
+              limit: params.limitPerBoard ?? 10,
+            }),
+          ]);
           return [...maJobs, ...generalJobs];
         }
+
         return await probeSmartRecruitersBoard({
           slug: board.slug,
           companyName: board.name,
@@ -503,7 +626,7 @@ export async function fetchAuthorizedCompanyBoardJobs(params: {
           slug: board.slug,
           companyName: board.name,
           website: board.website,
-          limit: params.limitPerBoard ?? 12,
+          limit: isMoroccoStrictlyOnly ? 35 : (params.limitPerBoard ?? 14),
         });
       }
       if (board.provider === "lever") {
@@ -511,7 +634,7 @@ export async function fetchAuthorizedCompanyBoardJobs(params: {
           slug: board.slug,
           companyName: board.name,
           website: board.website,
-          limit: params.limitPerBoard ?? 12,
+          limit: isMoroccoStrictlyOnly ? 40 : (params.limitPerBoard ?? 16),
         });
       }
       return await probeAshbyBoard({
@@ -526,11 +649,14 @@ export async function fetchAuthorizedCompanyBoardJobs(params: {
   });
 
   const settled = await Promise.all(tasks);
-  const combined = settled.flat();
+  const rawCombined = settled.flat();
+  const filtered = parsedLocs.hasAnyFilter
+    ? rawCombined.filter((j) => matchesSelectedLocations(j, params.locations))
+    : rawCombined;
 
   return {
-    status: combined.length > 0 ? "ok" : "partial",
-    jobs: combined,
+    status: filtered.length > 0 ? "ok" : "partial",
+    jobs: filtered,
     boardsQueried: selectedBoards.map((b) => `${b.provider}:${b.slug}`),
   };
 }

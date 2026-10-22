@@ -11,6 +11,10 @@ import {
   AUTHORIZED_COMPANY_BOARDS,
   fetchAuthorizedCompanyBoardJobs,
 } from "@/lib/jobs/sources/company-boards";
+import {
+  matchesSelectedLocations,
+  parseSelectedLocations,
+} from "@/lib/jobs/location-filter";
 import { calculateDeterministicJobMatch } from "@/lib/matching/engine";
 
 export interface DiscoverySearchFilters {
@@ -61,16 +65,44 @@ export async function runJobDiscoveryForUser(params: {
       ? filters.locations
       : ["Morocco", "France", "Europe", "Remote"];
 
+  const parsedLocs = parseSelectedLocations(locations);
+  const shouldQueryArbeitnow =
+    !parsedLocs.hasAnyFilter ||
+    parsedLocs.wantsEurope ||
+    parsedLocs.wantsFrance ||
+    parsedLocs.wantsInternational;
+  const shouldQueryRemotive =
+    !parsedLocs.hasAnyFilter ||
+    parsedLocs.wantsRemote ||
+    parsedLocs.wantsInternational ||
+    parsedLocs.wantsMorocco ||
+    parsedLocs.wantsFrance ||
+    parsedLocs.wantsEurope;
+
   const maxTotal = Math.min(Math.max(filters.limit ?? 35, 5), 60);
 
   const [remotiveRes, arbeitnowRes, companyBoardsRes, adzunaRes] =
     await Promise.all([
-      fetchRemotiveJobs({ query: derivedQuery, limit: 20 }),
-      fetchArbeitnowJobs({ query: derivedQuery, limit: 20 }),
+      shouldQueryRemotive
+        ? fetchRemotiveJobs({ query: derivedQuery, limit: 20 })
+        : Promise.resolve({
+            source: "remotive" as const,
+            status: "ok" as const,
+            jobs: [],
+            message: "Skipped Remote feed for strict on-site regional filter.",
+          }),
+      shouldQueryArbeitnow
+        ? fetchArbeitnowJobs({ query: derivedQuery, limit: 20 })
+        : Promise.resolve({
+            source: "arbeitnow" as const,
+            status: "ok" as const,
+            jobs: [],
+            message: "Skipped European Arbeitnow feed (strict Morocco/non-EU filter).",
+          }),
       fetchAuthorizedCompanyBoardJobs({
         query: derivedQuery,
         locations,
-        limitPerBoard: 10,
+        limitPerBoard: 14,
       }),
       fetchAdzunaJobs({
         query: derivedQuery,
@@ -113,8 +145,11 @@ export async function runJobDiscoveryForUser(params: {
     ...adzunaRes.jobs,
   ];
 
-  // Apply explicit user search filters
+  // Apply explicit user search filters INCLUDING strict regional / country boundaries
   combined = combined.filter((job) => {
+    if (!matchesSelectedLocations(job, locations)) {
+      return false;
+    }
     if (filters.remotePreference === "remote_only" && !job.is_remote) {
       return false;
     }

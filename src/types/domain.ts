@@ -11,7 +11,11 @@ export type JobSourceId =
   | "smartrecruiters"
   | "greenhouse"
   | "lever"
-  | "ashby";
+  | "ashby"
+  | "linkedin_import"
+  | "external_import";
+
+export type AutomationScheduleMode = "daily" | "specific_date" | "manual_only";
 
 export type ApprovalStatus =
   | "draft"
@@ -197,7 +201,14 @@ export interface DiscoveredJobInput {
   company_name: string;
   company_website?: string | null;
   company_careers_page?: string | null;
-  company_ats_provider?: "smartrecruiters" | "greenhouse" | "lever" | "ashby" | null;
+  company_ats_provider?:
+    | "smartrecruiters"
+    | "greenhouse"
+    | "lever"
+    | "ashby"
+    | "direct"
+    | "aggregator"
+    | null;
   company_ats_slug?: string | null;
   location: string;
   country_code?: string | null;

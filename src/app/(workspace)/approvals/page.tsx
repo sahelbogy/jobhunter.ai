@@ -9,6 +9,7 @@ import {
   FileText,
   Loader2,
   Lock,
+  MessageSquareShare,
   RefreshCw,
   Send,
   ShieldAlert,
@@ -180,6 +181,28 @@ export default function ApprovalQueuePage() {
         return;
       }
       toast.success(`Email sent! ${data.deliverySummary}`);
+      await loadQueue();
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function handleSendToWhatsApp(appId: string) {
+    setBusyId(appId);
+    try {
+      const res = await fetch("/api/whatsapp/kapso/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ applicationId: appId }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error || "Could not send approval card to WhatsApp.");
+        return;
+      }
+      toast.success(
+        `Sent to WhatsApp via Kapso (#${data.approvalCode})! Tap Approve & Send on WhatsApp to dispatch email.`
+      );
       await loadQueue();
     } finally {
       setBusyId(null);
@@ -399,6 +422,16 @@ export default function ApprovalQueuePage() {
                         <Badge variant="outline">
                           {app.language?.toUpperCase()}
                         </Badge>
+                        {app.scheduled_for_date && (
+                          <Badge variant="secondary">
+                            Scheduled: {app.scheduled_for_date}
+                          </Badge>
+                        )}
+                        {app.whatsapp_notified_at && (
+                          <Badge variant="outline" className="border-violet-500/40 text-violet-700 dark:text-violet-300">
+                            WhatsApp Sent
+                          </Badge>
+                        )}
                       </div>
                       <p className="text-xs text-muted-foreground">
                         Source: {app.application_source} • Recipient:{" "}
@@ -502,6 +535,15 @@ export default function ApprovalQueuePage() {
                       >
                         <RefreshCw className="h-3.5 w-3.5" />
                         Regenerate
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={isBusy || app.approval_status === "sent"}
+                        onClick={() => handleSendToWhatsApp(app.id)}
+                      >
+                        <MessageSquareShare className="h-3.5 w-3.5 text-violet-600" />
+                        WhatsApp (Kapso)
                       </Button>
                     </div>
 

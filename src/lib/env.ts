@@ -16,6 +16,8 @@ export interface ServerEnvStatus {
   adzunaConfigured: boolean;
   gmailOAuthConfigured: boolean;
   smtpConfigured: boolean;
+  kapsoConfigured: boolean;
+  kapsoWebhookSecretConfigured: boolean;
   cronSecretConfigured: boolean;
   tokenEncryptionConfigured: boolean;
 }
@@ -66,6 +68,13 @@ export function getServerEnvStatus(): ServerEnvStatus {
       process.env.SMTP_HOST?.trim() &&
         process.env.SMTP_USER?.trim() &&
         process.env.SMTP_PASS?.trim()
+    ),
+    kapsoConfigured: Boolean(
+      process.env.KAPSO_API_KEY?.trim() &&
+        process.env.KAPSO_PHONE_NUMBER_ID?.trim()
+    ),
+    kapsoWebhookSecretConfigured: Boolean(
+      process.env.KAPSO_WEBHOOK_SECRET?.trim()
     ),
     cronSecretConfigured: Boolean(process.env.CRON_SECRET?.trim()),
     tokenEncryptionConfigured: Boolean(

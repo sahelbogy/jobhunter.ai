@@ -29,6 +29,13 @@ export async function updateSession(request: NextRequest) {
   }
 
   const pathname = request.nextUrl.pathname;
+  if (
+    pathname.startsWith("/api/whatsapp/kapso/webhook") ||
+    pathname.startsWith("/api/cron/")
+  ) {
+    return supabaseResponse;
+  }
+
   const isProtectedRoute = PROTECTED_PREFIXES.some(
     (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`)
   );
