@@ -55,16 +55,28 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const buffer = Buffer.from(await file.arrayBuffer());
+    const uploadedBytes = new Uint8Array(await file.arrayBuffer());
+    const buffer = Buffer.allocUnsafe(uploadedBytes.byteLength);
+    buffer.set(uploadedBytes);
+    const fileByteLength = buffer.byteLength;
+
     const validation = validatePdfBuffer(buffer, file.name, file.type);
     if (!validation.valid) {
       return NextResponse.json({ error: validation.error }, { status: 400 });
     }
 
-    // 1. Extract text safely from PDF
+    // 1. Extract text safely from PDF (uses cloned buffer internally so `buffer` stays intact)
     const extraction = await extractPdfTextFromBuffer(buffer);
 
-    // 2. Upload to private Supabase Storage bucket `resumes/{user_id}/...`
+    // Defensive check that `buffer` was never detached and remains non-empty
+    if (buffer.byteLength !== fileByteLength || fileByteLength <= 0) {
+      return NextResponse.json(
+        { error: "PDF byte stream became invalid during processing. Please retry." },
+        { status: 500 }
+      );
+    }
+
+    // 2. Upload intact PDF bytes to private Supabase Storage bucket `resumes/{user_id}/...`
     const safeName = file.name
       .replace(/[^a-zA-Z0-9._-]+/g, "_")
       .slice(0, 80);
@@ -73,7 +85,7 @@ export async function POST(request: NextRequest) {
     const admin = createAdminSupabaseClient();
     const { error: uploadError } = await admin.storage
       .from("resumes")
-      .upload(storagePath, buffer, {
+      .upload(storagePath, new Uint8Array(buffer), {
         contentType: "application/pdf",
         upsert: false,
       });
@@ -124,7 +136,7 @@ export async function POST(request: NextRequest) {
         file_name: file.name,
         storage_bucket: "resumes",
         storage_path: storagePath,
-        file_size: buffer.byteLength,
+        file_size: fileByteLength,
         mime_type: "application/pdf",
         file_sha256: validation.sha256,
         raw_text: extraction.rawText,
@@ -137,6 +149,7 @@ export async function POST(request: NextRequest) {
       .single();
 
     if (insertError) {
+      await admin.storage.from("resumes").remove([storagePath]).catch(() => {});
       return NextResponse.json(
         { error: `Failed to save CV record: ${insertError.message}` },
         { status: 500 }

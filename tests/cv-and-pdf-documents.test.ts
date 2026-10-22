@@ -30,9 +30,19 @@ describe("CV PDF Parsing, Language Detection & AI Document/PDF Generation", () =
     cvLines.forEach((line, i) => {
       page.drawText(line, { x: 50, y: 780 - i * 24, size: 11, font });
     });
-    const pdfBytes = Buffer.from(await pdf.save());
+    const savedUint8 = await pdf.save();
+    // Simulate `Buffer.from(await file.arrayBuffer())` standalone ArrayBuffer view
+    // to ensure `extractPdfTextFromBuffer` NEVER detaches the caller's Buffer!
+    const standaloneArrayBuffer = savedUint8.buffer.slice(
+      savedUint8.byteOffset,
+      savedUint8.byteOffset + savedUint8.byteLength
+    );
+    const pdfBytes = Buffer.from(standaloneArrayBuffer);
+    const expectedByteLength = pdfBytes.byteLength;
+    expect(expectedByteLength).toBeGreaterThan(500);
 
     const extracted = await extractPdfTextFromBuffer(pdfBytes);
+    expect(pdfBytes.byteLength).toBe(expectedByteLength);
     expect(extracted.pageCount).toBe(1);
     expect(extracted.rawText).toContain("Youssef Benali");
     expect(extracted.rawText).toContain("TypeScript");

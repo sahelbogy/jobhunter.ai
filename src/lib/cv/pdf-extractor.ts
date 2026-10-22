@@ -24,12 +24,13 @@ export interface PdfExtractionOutput {
 export async function extractPdfTextFromBuffer(
   buffer: Buffer
 ): Promise<PdfExtractionOutput> {
-  const uint8 = new Uint8Array(
-    buffer.buffer,
-    buffer.byteOffset,
-    buffer.byteLength
-  );
-  const result = await extractText(uint8, { mergePages: true });
+  // Always clone into a dedicated Uint8Array copy because PDF.js (`unpdf`)
+  // transfers/detaches the underlying ArrayBuffer during extraction.
+  // Without copying, `Buffer.from(await file.arrayBuffer())` gets detached
+  // in-place, reducing `buffer.byteLength` to 0 for subsequent Storage/DB steps.
+  const uint8Copy = new Uint8Array(buffer.byteLength);
+  uint8Copy.set(buffer);
+  const result = await extractText(uint8Copy, { mergePages: true });
   const rawText = sanitizeUntrustedText(
     Array.isArray(result.text) ? result.text.join("\n") : result.text || "",
     30000
