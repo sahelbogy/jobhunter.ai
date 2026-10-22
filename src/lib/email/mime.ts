@@ -12,6 +12,7 @@ export interface MimeEmailInput {
   to: string;
   subject: string;
   textBody: string;
+  htmlBody?: string;
   attachments: MimeAttachment[];
 }
 
@@ -54,7 +55,9 @@ export function buildGmailRawMimeMessage(input: MimeEmailInput): string {
     )
     .join("");
 
-  const htmlBody = `<!DOCTYPE html><html><body style="margin:0;padding:16px;">${htmlParagraphs}</body></html>`;
+  const htmlBody =
+    input.htmlBody ||
+    `<!DOCTYPE html><html><body style="margin:0;padding:16px;">${htmlParagraphs}</body></html>`;
 
   const lines: string[] = [
     `From: ${input.from.replace(/[\r\n]/g, "")}`,

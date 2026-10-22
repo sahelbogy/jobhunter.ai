@@ -3,7 +3,7 @@ import type { AiProviderId, SupportedLanguage, UserProfile } from "@/types/domai
 import { generateTailoredApplicationWithAi } from "@/lib/documents/application-generator";
 import { buildVerifiedFallbackApplicationPackage } from "@/lib/documents/fallback-draft";
 import { generateCoverLetterPdfBuffer } from "@/lib/documents/cover-letter-pdf";
-import { dispatchApplicationToWhatsAppForApproval } from "@/lib/whatsapp/kapso";
+import { dispatchApplicationToEmailForApproval } from "@/lib/email/approval-loop";
 
 export interface PreparedApplicationSummary {
   applicationId: string;
@@ -14,9 +14,9 @@ export interface PreparedApplicationSummary {
   aiProvider: string;
   recipientEmail: string | null;
   scheduledForDate: string | null;
-  whatsappDispatched: boolean;
-  whatsappApprovalCode?: string;
-  whatsappNote?: string;
+  emailApprovalDispatched: boolean;
+  emailApprovalCode?: string;
+  emailApprovalNote?: string;
 }
 
 export async function prepareSingleJobApplicationForUser(params: {
@@ -38,8 +38,8 @@ export async function prepareSingleJobApplicationForUser(params: {
   fallbackProvider: AiProviderId | null;
   languageOverride?: "auto" | SupportedLanguage;
   scheduledForDate?: string | null;
-  dispatchWhatsAppNow?: boolean;
-  whatsappPhone?: string | null;
+  dispatchEmailApprovalNow?: boolean;
+  approverEmail?: string | null;
 }): Promise<PreparedApplicationSummary> {
   const {
     adminSupabase,
@@ -212,27 +212,27 @@ export async function prepareSingleJobApplicationForUser(params: {
     );
   }
 
-  let whatsappDispatched = false;
-  let whatsappApprovalCode: string | undefined;
-  let whatsappNote: string | undefined;
+  let emailApprovalDispatched = false;
+  let emailApprovalCode: string | undefined;
+  let emailApprovalNote: string | undefined;
 
-  if (params.dispatchWhatsAppNow && params.whatsappPhone) {
+  if (params.dispatchEmailApprovalNow) {
     try {
-      const wa = await dispatchApplicationToWhatsAppForApproval({
+      const em = await dispatchApplicationToEmailForApproval({
         adminSupabase,
         userId,
         applicationId: savedApp.id,
-        whatsappPhone: params.whatsappPhone,
+        approverEmail: params.approverEmail ?? null,
       });
-      whatsappDispatched = wa.dispatched;
-      whatsappApprovalCode = wa.approvalCode;
-      whatsappNote = wa.reason;
-    } catch (waErr) {
-      whatsappDispatched = false;
-      whatsappNote =
-        waErr instanceof Error
-          ? waErr.message
-          : "WhatsApp dispatch encountered an error.";
+      emailApprovalDispatched = em.dispatched;
+      emailApprovalCode = em.approvalCode;
+      emailApprovalNote = em.reason;
+    } catch (emErr) {
+      emailApprovalDispatched = false;
+      emailApprovalNote =
+        emErr instanceof Error
+          ? emErr.message
+          : "Email approval dispatch encountered an error.";
     }
   }
 
@@ -245,8 +245,8 @@ export async function prepareSingleJobApplicationForUser(params: {
     aiProvider: generated.ai_provider,
     recipientEmail: savedApp.recipient_email ?? null,
     scheduledForDate: savedApp.scheduled_for_date ?? null,
-    whatsappDispatched,
-    whatsappApprovalCode,
-    whatsappNote,
+    emailApprovalDispatched,
+    emailApprovalCode,
+    emailApprovalNote,
   };
 }

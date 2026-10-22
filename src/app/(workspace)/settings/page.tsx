@@ -209,124 +209,134 @@ export default function SettingsPage() {
             <Cpu className="h-5 w-5 text-primary" />
             <div>
               <CardTitle className="text-base">
-                Modular Cloud AI Provider Layer
+                100% Free Cloud AI Providers (Groq Cloud &amp; Google Gemini)
               </CardTitle>
               <CardDescription>
-                Primary Groq + Secondary Gemini + Optional xAI Grok. Never
-                silently switches to a paid provider unless explicitly allowed.
+                Utilisez gratuitement <strong>Groq Cloud</strong> (avec un{" "}
+                <code>q</code> — 100% gratuit sur console.groq.com, distinct de
+                xAI Grok payant) et/ou <strong>Google Gemini AI Studio</strong>{" "}
+                (100% gratuit).
               </CardDescription>
             </div>
           </div>
         </CardHeader>
         <CardContent className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {providers.map((p) => (
-              <div
-                key={p.id}
-                className="rounded-xl border p-4 flex flex-col justify-between gap-3 text-xs"
-              >
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-semibold text-sm">
-                      {p.name || p.id.toUpperCase()}
-                    </span>
-                    {p.hasUserKey ? (
-                      <Badge variant="success">
-                        Encrypted Key ({p.keyHint})
-                      </Badge>
-                    ) : p.configured ? (
-                      <Badge variant="success">Server Key Active</Badge>
-                    ) : (
-                      <Badge variant="warning">Missing API Key</Badge>
-                    )}
-                  </div>
-                  <p className="text-muted-foreground">
-                    Default model: <code>{p.defaultModel}</code>
-                  </p>
-                  {p.docsUrl ? (
-                    <a
-                      href={p.docsUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1 text-[11px] font-medium text-blue-600 dark:text-blue-400 hover:underline"
-                    >
-                      Get {p.id === "groq" ? "free Groq" : p.name} API key
-                      <ExternalLink className="h-3 w-3" />
-                    </a>
-                  ) : null}
-                </div>
-
-                <div className="space-y-2 border-t pt-2.5">
-                  <Input
-                    type="password"
-                    autoComplete="off"
-                    value={keyDrafts[p.id] ?? ""}
-                    onChange={(e) =>
-                      setKeyDrafts((prev) => ({
-                        ...prev,
-                        [p.id]: e.target.value,
-                      }))
-                    }
-                    placeholder={
-                      p.hasUserKey
-                        ? `Replace stored key (${p.keyHint})...`
-                        : `Paste ${p.envKeyName || `${p.id.toUpperCase()}_API_KEY`}...`
-                    }
-                    className="h-8 text-xs font-mono"
-                  />
-                  <div className="flex flex-wrap gap-1.5">
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="secondary"
-                      className="flex-1 h-8 text-xs"
-                      disabled={savingKeyProvider === p.id}
-                      onClick={() => handleSaveProviderKey(p.id, false)}
-                    >
-                      {savingKeyProvider === p.id ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {providers
+              .filter((p) => !p.isPaidOnly)
+              .map((p) => (
+                <div
+                  key={p.id}
+                  className="rounded-xl border border-emerald-500/30 p-4 flex flex-col justify-between gap-3 text-xs"
+                >
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-sm">
+                          {p.name || p.id.toUpperCase()}
+                        </span>
+                        <Badge variant="success">100% Gratuit</Badge>
+                      </div>
+                      {p.hasUserKey ? (
+                        <Badge variant="success">
+                          Clé Chiffrée ({p.keyHint})
+                        </Badge>
+                      ) : p.configured ? (
+                        <Badge variant="success">Clé Serveur Active</Badge>
                       ) : (
-                        <Save className="h-3.5 w-3.5" />
+                        <Badge variant="warning">Clé Gratuite à Coller</Badge>
                       )}
-                      Save Encrypted Key
-                    </Button>
-                    {p.hasUserKey ? (
+                    </div>
+                    <p className="text-muted-foreground">
+                      Modèle gratuit par défaut : <code>{p.defaultModel}</code>
+                    </p>
+                    {p.docsUrl ? (
+                      <a
+                        href={p.docsUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-600 dark:text-blue-400 hover:underline"
+                      >
+                        Obtenir ma clé gratuite{" "}
+                        {p.id === "groq"
+                          ? "Groq Cloud (console.groq.com)"
+                          : "Google Gemini (aistudio.google.com)"}
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    ) : null}
+                  </div>
+
+                  <div className="space-y-2 border-t pt-2.5">
+                    <Input
+                      type="password"
+                      autoComplete="off"
+                      value={keyDrafts[p.id] ?? ""}
+                      onChange={(e) =>
+                        setKeyDrafts((prev) => ({
+                          ...prev,
+                          [p.id]: e.target.value,
+                        }))
+                      }
+                      placeholder={
+                        p.hasUserKey
+                          ? `Remplacer la clé (${p.keyHint})...`
+                          : `Collez votre clé gratuite ${p.envKeyName || `${p.id.toUpperCase()}_API_KEY`}...`
+                      }
+                      className="h-8 text-xs font-mono"
+                    />
+                    <div className="flex flex-wrap gap-1.5">
                       <Button
                         type="button"
                         size="sm"
-                        variant="ghost"
-                        className="h-8 px-2 text-xs text-red-600"
+                        variant="secondary"
+                        className="flex-1 h-8 text-xs"
                         disabled={savingKeyProvider === p.id}
-                        onClick={() => handleSaveProviderKey(p.id, true)}
+                        onClick={() => handleSaveProviderKey(p.id, false)}
                       >
-                        Clear
+                        {savingKeyProvider === p.id ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Save className="h-3.5 w-3.5" />
+                        )}
+                        Enregistrer Clé Chiffrée
                       </Button>
-                    ) : null}
+                      {p.hasUserKey ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          className="h-8 px-2 text-xs text-red-600"
+                          disabled={savingKeyProvider === p.id}
+                          onClick={() => handleSaveProviderKey(p.id, true)}
+                        >
+                          Supprimer
+                        </Button>
+                      ) : null}
+                    </div>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="w-full h-8 text-xs"
+                      disabled={testingProvider === p.id}
+                      onClick={() => handleTestProvider(p.id)}
+                    >
+                      {testingProvider === p.id ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Zap className="h-3.5 w-3.5" />
+                      )}
+                      Tester la Connexion
+                    </Button>
                   </div>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    className="w-full h-8 text-xs"
-                    disabled={testingProvider === p.id}
-                    onClick={() => handleTestProvider(p.id)}
-                  >
-                    {testingProvider === p.id ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Zap className="h-3.5 w-3.5" />
-                    )}
-                    Test Connection
-                  </Button>
                 </div>
-              </div>
-            ))}
+              ))}
           </div>
 
           <form onSubmit={handleSaveAiPrefs} className="space-y-4 border-t pt-4">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="space-y-1.5">
-                <Label>Primary AI Provider</Label>
+                <Label>Primary AI Provider (100% Gratuit)</Label>
                 <select
                   value={primaryProvider}
                   onChange={(e) => {
@@ -339,9 +349,12 @@ export default function SettingsPage() {
                   }}
                   className="flex h-10 w-full rounded-lg border border-input bg-background px-3 text-sm"
                 >
-                  <option value="groq">Groq Cloud (Primary Default)</option>
-                  <option value="gemini">Google Gemini API</option>
-                  <option value="xai">xAI Grok API (Optional)</option>
+                  <option value="groq">
+                    Groq Cloud — 100% Gratuit (Recommandé)
+                  </option>
+                  <option value="gemini">
+                    Google Gemini AI Studio — 100% Gratuit
+                  </option>
                 </select>
               </div>
 
@@ -365,7 +378,7 @@ export default function SettingsPage() {
               </div>
 
               <div className="space-y-1.5">
-                <Label>Explicit Fallback Provider</Label>
+                <Label>Explicit Free Fallback Provider</Label>
                 <select
                   value={fallbackProvider}
                   onChange={(e) => setFallbackProvider(e.target.value as any)}
@@ -374,23 +387,13 @@ export default function SettingsPage() {
                   <option value="none">
                     Disabled (Never switch providers automatically)
                   </option>
-                  <option value="gemini">Google Gemini API</option>
-                  <option value="groq">Groq Cloud</option>
-                  <option value="xai">xAI Grok API (Paid)</option>
+                  <option value="gemini">
+                    Google Gemini AI Studio — 100% Gratuit
+                  </option>
+                  <option value="groq">Groq Cloud — 100% Gratuit</option>
                 </select>
               </div>
             </div>
-
-            <label className="flex items-center gap-2.5 text-xs font-medium cursor-pointer">
-              <input
-                type="checkbox"
-                checked={allowPaidFallback}
-                onChange={(e) => setAllowPaidFallback(e.target.checked)}
-                className="h-4 w-4 rounded border-input accent-blue-600"
-              />
-              Allow paid fallback provider (required only if xAI Grok is chosen
-              as fallback)
-            </label>
 
             <Button type="submit" disabled={savingAi}>
               {savingAi ? (

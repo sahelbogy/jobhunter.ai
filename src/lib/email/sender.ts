@@ -7,6 +7,7 @@ import {
 import { sha256Hex, validateRecipientEmail } from "@/lib/security/sanitize";
 import { getValidGmailAccessToken } from "@/lib/email/gmail-oauth";
 import { buildGmailRawMimeMessage } from "@/lib/email/mime";
+import { resolveSmtpCredentials } from "@/lib/email/transport";
 
 export interface SendApprovedApplicationResult {
   sent: boolean;
@@ -286,28 +287,16 @@ export async function sendApprovedApplicationEmail(params: {
       providerMessageId = String(sendJson.id);
       providerThreadId = sendJson.threadId ? String(sendJson.threadId) : null;
     } else {
-      // Optional server-configured SMTP provider
-      const host = process.env.SMTP_HOST?.trim();
-      const port = Number(process.env.SMTP_PORT || 587);
-      const user = process.env.SMTP_USER?.trim();
-      const pass = process.env.SMTP_PASS?.trim();
-      const fromAddr = process.env.SMTP_FROM?.trim() || connection.email_address;
-
-      if (!host || !user || !pass) {
-        throw new Error(
-          "SMTP server environment variables (SMTP_HOST, SMTP_USER, SMTP_PASS) are not configured."
-        );
-      }
-
+      const smtp = resolveSmtpCredentials(connection);
       const transporter = nodemailer.createTransport({
-        host,
-        port,
-        secure: port === 465,
-        auth: { user, pass },
+        host: smtp.host,
+        port: smtp.port,
+        secure: smtp.port === 465,
+        auth: { user: smtp.user, pass: smtp.pass },
       });
 
       const info = await transporter.sendMail({
-        from: fromAddr,
+        from: smtp.from,
         to: recipientCheck.normalized,
         subject: app.email_subject,
         text: app.email_body,

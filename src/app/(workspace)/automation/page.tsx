@@ -1,14 +1,13 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import Link from "next/link";
 import {
   Bot,
   CalendarClock,
-  CheckCircle2,
   Clock,
-  Copy,
   Loader2,
-  MessageSquareShare,
+  MailCheck,
   Play,
   Save,
   Send,
@@ -50,26 +49,17 @@ export default function AutomationPage() {
   );
   const [notifyInApp, setNotifyInApp] = useState(true);
 
-  // Kapso WhatsApp settings
-  const [whatsappEnabled, setWhatsappEnabled] = useState(false);
-  const [whatsappPhone, setWhatsappPhone] = useState("");
-  const [autoSendOnWhatsAppApproval, setAutoSendOnWhatsAppApproval] =
-    useState(true);
-  const [kapsoStatus, setKapsoStatus] = useState<{
-    configured: boolean;
-    webhookSecretConfigured: boolean;
+  // Email Approval loop settings
+  const [emailApprovalEnabled, setEmailApprovalEnabled] = useState(true);
+  const [approvalEmailRecipient, setApprovalEmailRecipient] = useState("");
+  const [autoSendOnEmailApproval, setAutoSendOnEmailApproval] = useState(true);
+  const [emailConnection, setEmailConnection] = useState<{
+    provider: string;
+    email_address: string;
+    is_active: boolean;
   } | null>(null);
-  const [connectedKapsoSender, setConnectedKapsoSender] = useState<{
-    phoneNumberId: string;
-    displayPhoneNumber: string | null;
-  } | null>(null);
-  const [kapsoWaMeLink, setKapsoWaMeLink] = useState<string | null>(null);
-  const [sessionWindowWarning, setSessionWindowWarning] = useState<
-    string | null
-  >(null);
-  const [creatingTemplate, setCreatingTemplate] = useState(false);
-  const [whatsappApprovals, setWhatsappApprovals] = useState<Array<any>>([]);
-  const [testingWhatsApp, setTestingWhatsApp] = useState(false);
+  const [emailApprovals, setEmailApprovals] = useState<Array<any>>([]);
+  const [testingEmailApproval, setTestingEmailApproval] = useState(false);
 
   const [runs, setRuns] = useState<Array<any>>([]);
   const [loading, setLoading] = useState(true);
@@ -88,7 +78,10 @@ export default function AutomationPage() {
         if (s.scheduled_date) {
           setScheduledDate(s.scheduled_date);
         }
-        if (Array.isArray(s.search_locations) && s.search_locations.length > 0) {
+        if (
+          Array.isArray(s.search_locations) &&
+          s.search_locations.length > 0
+        ) {
           setLocationsText(s.search_locations.join(", "));
         }
         if (
@@ -104,40 +97,27 @@ export default function AutomationPage() {
         setMinMatchScore(s.min_match_score ?? 70);
         setMaxOpportunities(s.max_opportunities_per_run ?? 25);
         setMaxDrafts(s.max_drafts_per_run ?? 5);
-        setAiProvider(s.ai_provider ?? "groq");
+        setAiProvider(
+          s.ai_provider === "xai" ? "groq" : (s.ai_provider ?? "groq")
+        );
         setEmailLanguage(s.email_language ?? "auto");
         setNotifyInApp(s.notify_in_app ?? true);
-        setWhatsappEnabled(Boolean(s.whatsapp_enabled));
-        setWhatsappPhone(s.whatsapp_phone_number ?? "");
-        setAutoSendOnWhatsAppApproval(
-          s.auto_send_on_whatsapp_approval !== false
+        setEmailApprovalEnabled(s.email_approval_enabled !== false);
+        setApprovalEmailRecipient(
+          s.approval_email_recipient || d.emailConnection?.email_address || ""
         );
+        setAutoSendOnEmailApproval(s.auto_send_on_email_approval !== false);
         setRuns(d.runs ?? []);
-        setWhatsappApprovals(d.whatsappApprovals ?? []);
-        setKapsoStatus(d.kapso ?? null);
+        setEmailApprovals(d.emailApprovals ?? []);
+        setEmailConnection(d.emailConnection ?? null);
 
-        // Pre-fill recipient phone from profile if empty, and inspect connected Kapso sender
-        const [profRes, kapsoRes] = await Promise.all([
-          !s.whatsapp_phone_number
-            ? fetch("/api/profile").catch(() => null)
-            : Promise.resolve(null),
-          d.kapso?.configured
-            ? fetch("/api/whatsapp/kapso/test").catch(() => null)
-            : Promise.resolve(null),
-        ]);
-        if (profRes && profRes.ok) {
-          const pd = await profRes.json();
-          if (pd.profile?.phone) {
-            setWhatsappPhone(pd.profile.phone);
-          }
-        }
-        if (kapsoRes && kapsoRes.ok) {
-          const kd = await kapsoRes.json();
-          if (kd.connectedNumber) {
-            setConnectedKapsoSender(kd.connectedNumber);
-          }
-          if (kd.waMeLink) {
-            setKapsoWaMeLink(kd.waMeLink);
+        if (!s.approval_email_recipient && !d.emailConnection?.email_address) {
+          const profRes = await fetch("/api/profile").catch(() => null);
+          if (profRes && profRes.ok) {
+            const pd = await profRes.json();
+            if (pd.profile?.email) {
+              setApprovalEmailRecipient(pd.profile.email);
+            }
           }
         }
       }
@@ -154,12 +134,6 @@ export default function AutomationPage() {
     e.preventDefault();
     setSaving(true);
     try {
-      const splitCsv = (v: string) =>
-        v
-          .split(",")
-          .map((x) => x.trim())
-          .filter(Boolean);
-
       const res = await fetch("/api/automation", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -169,31 +143,40 @@ export default function AutomationPage() {
           schedule_mode: scheduleMode,
           scheduled_date:
             scheduleMode === "specific_date" ? scheduledDate : null,
-          search_locations: splitCsv(locationsText),
-          preferred_sectors: splitCsv(sectorsText),
-          search_keywords: splitCsv(keywordsText),
+          search_locations: locationsText
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean),
+          preferred_sectors: sectorsText
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean),
+          search_keywords: keywordsText
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean),
           include_remote: includeRemote,
           min_match_score: Number(minMatchScore),
           max_opportunities_per_run: Number(maxOpportunities),
-          auto_generate_drafts: true,
+          auto_generate_drafts: maxDrafts > 0,
           max_drafts_per_run: Number(maxDrafts),
           ai_provider: aiProvider,
           fallback_ai_provider: null,
           email_language: emailLanguage,
           notify_in_app: notifyInApp,
-          notify_email: false,
-          whatsapp_enabled: whatsappEnabled,
-          whatsapp_phone_number: whatsappPhone.trim(),
-          auto_send_on_whatsapp_approval: autoSendOnWhatsAppApproval,
+          notify_email: emailApprovalEnabled,
+          email_approval_enabled: emailApprovalEnabled,
+          approval_email_recipient: approvalEmailRecipient.trim(),
+          auto_send_on_email_approval: autoSendOnEmailApproval,
         }),
       });
       const data = await res.json();
       if (!res.ok) {
-        toast.error(data.error || "Could not save automation settings.");
+        toast.error(data.error || "Failed to save automation settings.");
         return;
       }
       toast.success(
-        "Paramètres d'automatisation et WhatsApp (Kapso) enregistrés !"
+        "Paramètres d'automatisation et de validation par email enregistrés !"
       );
       await loadAutomation();
     } finally {
@@ -207,15 +190,11 @@ export default function AutomationPage() {
       const res = await fetch("/api/automation/run", { method: "POST" });
       const data = await res.json();
       if (!res.ok) {
-        toast.error(data.error || "Automation run failed.");
-        return;
-      }
-      if (data.status === "skipped_locked") {
-        toast.warning(data.errorMessage || "A run is already in progress.");
+        toast.error(data.error || "Automation execution failed.");
         return;
       }
       toast.success(
-        `Automation complete: ${data.jobsDiscovered} jobs scanned, ${data.jobsMatched} matched, ${data.draftsGenerated} drafts prepared.`
+        `Pipeline terminé : ${data.jobsDiscovered} offres scannées, ${data.jobsMatched} qualifiées, ${data.draftsGenerated} candidatures préparées.`
       );
       await loadAutomation();
     } finally {
@@ -223,82 +202,44 @@ export default function AutomationPage() {
     }
   }
 
-  async function handleTestWhatsApp() {
-    if (!whatsappPhone.trim()) {
-      toast.error("Saisissez votre numéro WhatsApp (ex: +212612345678).");
-      return;
-    }
-    setTestingWhatsApp(true);
-    setSessionWindowWarning(null);
+  async function handleTestEmailApproval() {
+    setTestingEmailApproval(true);
     try {
-      const res = await fetch("/api/whatsapp/kapso/test", {
+      const res = await fetch("/api/email/approval-test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: whatsappPhone.trim() }),
-      });
-      const data = await res.json();
-      if (data.waMeLink) {
-        setKapsoWaMeLink(data.waMeLink);
-      }
-      if (data.connectedNumber) {
-        setConnectedKapsoSender(data.connectedNumber);
-      }
-      if (!res.ok) {
-        if (data.requiresSessionWindow) {
-          setSessionWindowWarning(data.error);
-        }
-        toast.error(data.error || "Kapso WhatsApp test failed.");
-        return;
-      }
-      toast.success(
-        data.note
-          ? `Message WhatsApp envoyé (${data.phone}) ! ${data.note}`
-          : `Message test envoyé sur WhatsApp (${data.phone}) via Kapso !`
-      );
-    } finally {
-      setTestingWhatsApp(false);
-    }
-  }
-
-  async function handleCreateUtilityTemplate() {
-    setCreatingTemplate(true);
-    try {
-      const res = await fetch("/api/whatsapp/kapso/template", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ language: "fr" }),
+        body: JSON.stringify({
+          approverEmail: approvalEmailRecipient.trim() || undefined,
+        }),
       });
       const data = await res.json();
       if (!res.ok) {
-        toast.error(data.error || "Échec de soumission du modèle Meta.");
+        toast.error(
+          data.error || "Impossible d'envoyer l'email test de validation."
+        );
         return;
       }
       toast.success(
-        `Modèle Meta « ${data.template?.name} » soumis (${data.template?.status}) !`
+        `Email test de validation envoyé à ${data.approverEmail} !`
       );
     } finally {
-      setCreatingTemplate(false);
+      setTestingEmailApproval(false);
     }
   }
-
-  const webhookUrl =
-    typeof window !== "undefined"
-      ? `${window.location.origin}/api/whatsapp/kapso/webhook`
-      : "https://jobhunterai-five.vercel.app/api/whatsapp/kapso/webhook";
 
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-xl font-bold">
-            Cloud Automation &amp; Kapso WhatsApp Approval
+            Cloud Automation &amp; Email Approval Loop
           </h2>
           <p className="text-sm text-muted-foreground">
             Automatisez vos postulations <strong>chaque jour</strong> ou{" "}
             <strong>un jour précis</strong> : l&apos;IA génère le mail + Lettre de
-            Motivation PDF, vous envoie tout sur WhatsApp via{" "}
-            <strong>Kapso</strong>, et expédie l&apos;email depuis votre boîte
-            connectée dès votre approbation.
+            Motivation PDF, vous envoie tout dans votre boîte email pour
+            validation, et expédie directement au recruteur dès votre clic sur{" "}
+            <strong>Approuver &amp; Envoyer</strong>.
           </p>
         </div>
         <Button onClick={handleRunNow} disabled={runningNow}>
@@ -315,10 +256,9 @@ export default function AutomationPage() {
         <ShieldCheck className="h-4 w-4 shrink-0 mt-0.5" />
         <div>
           <strong>Garantie Zéro Envoi Sans Validation Humaine :</strong> Aucun
-          email n&apos;est envoyé sans votre clic explicite sur{" "}
-          <strong>Approuver &amp; Envoyer</strong> (sur WhatsApp via Kapso avec
-          signature HMAC-SHA256 + hash SHA-256 du contenu, ou dans Approval
-          Queue).
+          email n&apos;est envoyé au recruteur sans votre confirmation explicite
+          (jeton signé HMAC-SHA256 + empreinte SHA-256 du destinataire, du texte
+          et des PDF dans votre email de validation, ou dans Approval Queue).
         </div>
       </div>
 
@@ -356,7 +296,7 @@ export default function AutomationPage() {
           <CardContent className="space-y-5">
             {loading ? (
               <p className="text-xs text-muted-foreground">
-                Loading settings...
+                Chargement des paramètres...
               </p>
             ) : (
               <>
@@ -378,7 +318,7 @@ export default function AutomationPage() {
                       onChange={(e) => setIncludeRemote(e.target.checked)}
                       className="h-4 w-4 rounded border-input accent-blue-600"
                     />
-                    Inclure le Télétravail / Remote
+                    Inclure aussi les offres 100% Remote hors région cible
                   </label>
 
                   <label className="flex items-center gap-2.5 text-sm font-medium cursor-pointer">
@@ -392,32 +332,39 @@ export default function AutomationPage() {
                   </label>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 rounded-xl border bg-muted/30 p-3.5">
                   <div className="space-y-1.5">
-                    <Label>Fréquence d&apos;automatisation</Label>
+                    <Label className="flex items-center gap-1.5">
+                      <CalendarClock className="h-3.5 w-3.5 text-blue-600" />
+                      Mode de planification
+                    </Label>
                     <select
                       value={scheduleMode}
-                      onChange={(e) => setScheduleMode(e.target.value as any)}
+                      onChange={(e) =>
+                        setScheduleMode(
+                          e.target.value as
+                            | "daily"
+                            | "specific_date"
+                            | "manual_only"
+                        )
+                      }
                       className="flex h-10 w-full rounded-lg border border-input bg-background px-3 text-sm"
                     >
                       <option value="daily">
-                        Chaque jour (Quotidien 07:00 UTC)
+                        Chaque jour (Quotidien automatique)
                       </option>
                       <option value="specific_date">
-                        Un jour précis (Date exacte)
+                        Un jour précis (Date choisie)
                       </option>
                       <option value="manual_only">
-                        Manuel uniquement (depuis Find Jobs)
+                        Manuel uniquement (Run Now)
                       </option>
                     </select>
                   </div>
 
                   {scheduleMode === "specific_date" && (
                     <div className="space-y-1.5">
-                      <Label className="flex items-center gap-1.5">
-                        <CalendarClock className="h-3.5 w-3.5 text-primary" />
-                        Date précise d&apos;exécution
-                      </Label>
+                      <Label>Date précise d&apos;exécution</Label>
                       <Input
                         type="date"
                         value={scheduledDate}
@@ -495,22 +442,27 @@ export default function AutomationPage() {
                       onChange={(e) => setEmailLanguage(e.target.value as any)}
                       className="flex h-10 w-full rounded-lg border border-input bg-background px-3 text-sm"
                     >
-                      <option value="auto">Auto-détection (FR / EN)</option>
+                      <option value="auto">
+                        Auto-détection selon l&apos;offre (FR / EN)
+                      </option>
                       <option value="fr">Français (FR)</option>
                       <option value="en">Anglais (EN)</option>
                     </select>
                   </div>
 
                   <div className="space-y-1.5">
-                    <Label>Fournisseur IA Principal</Label>
+                    <Label>Fournisseur IA Principal (100% Gratuit)</Label>
                     <select
                       value={aiProvider}
                       onChange={(e) => setAiProvider(e.target.value as any)}
                       className="flex h-10 w-full rounded-lg border border-input bg-background px-3 text-sm"
                     >
-                      <option value="groq">Groq Cloud (Défaut)</option>
-                      <option value="gemini">Google Gemini</option>
-                      <option value="xai">xAI Grok</option>
+                      <option value="groq">
+                        Groq Cloud — 100% Gratuit (Recommandé)
+                      </option>
+                      <option value="gemini">
+                        Google Gemini AI Studio — 100% Gratuit
+                      </option>
                     </select>
                   </div>
                 </div>
@@ -519,171 +471,104 @@ export default function AutomationPage() {
           </CardContent>
         </Card>
 
-        {/* Card 2: Kapso WhatsApp Approval -> Direct User Email Dispatch */}
-        <Card className="border-violet-500/40">
+        {/* Card 2: Email Approval -> Direct Employer Dispatch */}
+        <Card className="border-blue-500/40">
           <CardHeader>
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div>
                 <CardTitle className="text-base flex items-center gap-2">
-                  <MessageSquareShare className="h-4 w-4 text-violet-600" />
-                  2. Validation WhatsApp via Kapso &rarr; Envoi Email Direct
+                  <MailCheck className="h-4 w-4 text-blue-600" />
+                  2. Validation par Email &rarr; Envoi Direct au Recruteur
                 </CardTitle>
                 <CardDescription>
-                  Recevez sur WhatsApp la Lettre de Motivation PDF + aperçu du
-                  mail avec les boutons <strong>Approuver &amp; Envoyer</strong>{" "}
-                  et <strong>Refuser</strong>
+                  Recevez dans votre boîte email l&apos;aperçu complet du mail +
+                  la Lettre de Motivation PDF en pièce jointe avec les boutons{" "}
+                  <strong>Approuver &amp; Envoyer</strong> et{" "}
+                  <strong>Refuser</strong>
                 </CardDescription>
               </div>
               <div className="flex flex-wrap gap-1.5">
-                <Badge
-                  variant={kapsoStatus?.configured ? "success" : "warning"}
-                >
-                  Kapso API:{" "}
-                  {kapsoStatus?.configured
-                    ? connectedKapsoSender?.displayPhoneNumber
-                      ? `Connecté (${connectedKapsoSender.displayPhoneNumber})`
-                      : "Connecté (auto phone_number_id)"
-                    : "Requiert KAPSO_API_KEY"}
-                </Badge>
-                <Badge
-                  variant={
-                    kapsoStatus?.webhookSecretConfigured ? "success" : "warning"
-                  }
-                >
-                  Webhook HMAC:{" "}
-                  {kapsoStatus?.webhookSecretConfigured
-                    ? "Actif"
-                    : "Requiert KAPSO_WEBHOOK_SECRET"}
-                </Badge>
+                {emailConnection?.is_active ? (
+                  <Badge variant="success">
+                    Boîte connectée : {emailConnection.email_address}
+                  </Badge>
+                ) : (
+                  <Badge variant="warning">
+                    Connectez votre boîte dans Email Center
+                  </Badge>
+                )}
               </div>
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
+            {!emailConnection?.is_active ? (
+              <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3.5 text-xs text-amber-950 dark:text-amber-200 flex flex-wrap items-center justify-between gap-2">
+                <span>
+                  Connectez votre Gmail (Mot de passe d&apos;application gratuit
+                  16 caractères ou OAuth) pour activer l&apos;envoi des emails de
+                  validation et des candidatures.
+                </span>
+                <Link
+                  href="/emails"
+                  className="inline-flex h-8 items-center rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white hover:bg-blue-700"
+                >
+                  Ouvrir Email Center &rarr;
+                </Link>
+              </div>
+            ) : null}
+
             <div className="flex flex-wrap gap-6">
               <label className="flex items-center gap-2.5 text-sm font-medium cursor-pointer">
                 <input
                   type="checkbox"
-                  checked={whatsappEnabled}
-                  onChange={(e) => setWhatsappEnabled(e.target.checked)}
-                  className="h-4 w-4 rounded border-input accent-violet-600"
+                  checked={emailApprovalEnabled}
+                  onChange={(e) => setEmailApprovalEnabled(e.target.checked)}
+                  className="h-4 w-4 rounded border-input accent-blue-600"
                 />
-                Envoyer les candidatures préparées sur mon WhatsApp (Kapso)
+                M&apos;envoyer chaque candidature préparée par email pour
+                validation (avec Lettre PDF jointe)
               </label>
 
               <label className="flex items-center gap-2.5 text-sm font-medium cursor-pointer">
                 <input
                   type="checkbox"
-                  checked={autoSendOnWhatsAppApproval}
-                  onChange={(e) =>
-                    setAutoSendOnWhatsAppApproval(e.target.checked)
-                  }
-                  className="h-4 w-4 rounded border-input accent-violet-600"
+                  checked={autoSendOnEmailApproval}
+                  onChange={(e) => setAutoSendOnEmailApproval(e.target.checked)}
+                  className="h-4 w-4 rounded border-input accent-blue-600"
                 />
-                Envoyer directement depuis mon email connecté dès mon
-                approbation sur WhatsApp
+                Envoyer directement au recruteur depuis ma boîte connectée dès
+                mon clic sur « Approuver &amp; Envoyer »
               </label>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
-              <div className="space-y-1.5">
-                <Label>Votre numéro WhatsApp (format international)</Label>
+              <div className="space-y-1.5 md:col-span-2">
+                <Label>
+                  Votre adresse email de réception pour valider les candidatures
+                </Label>
                 <Input
-                  placeholder="+212612345678"
-                  value={whatsappPhone}
-                  onChange={(e) => setWhatsappPhone(e.target.value)}
+                  type="email"
+                  placeholder="votre.nom@gmail.com"
+                  value={approvalEmailRecipient}
+                  onChange={(e) => setApprovalEmailRecipient(e.target.value)}
                 />
               </div>
 
-              <div className="md:col-span-2 flex flex-wrap gap-2">
-                {kapsoWaMeLink ? (
-                  <a
-                    href={kapsoWaMeLink}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3.5 text-xs font-semibold text-white hover:bg-emerald-700 transition-colors"
-                  >
-                    1. Envoyer « Bonjour » au numéro Kapso (Session 24h)
-                  </a>
-                ) : null}
-
+              <div>
                 <Button
                   type="button"
                   variant="outline"
-                  disabled={testingWhatsApp}
-                  onClick={handleTestWhatsApp}
+                  disabled={testingEmailApproval}
+                  onClick={handleTestEmailApproval}
                 >
-                  {testingWhatsApp ? (
+                  {testingEmailApproval ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : (
                     <Send className="h-4 w-4" />
                   )}
-                  {kapsoWaMeLink
-                    ? "2. Tester WhatsApp (Kapso)"
-                    : "Tester WhatsApp (Kapso)"}
-                </Button>
-
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  disabled={creatingTemplate}
-                  onClick={handleCreateUtilityTemplate}
-                  className="text-xs"
-                >
-                  {creatingTemplate ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : null}
-                  Créer modèle Utility Meta (hors 24h)
+                  Tester l&apos;Email de Validation
                 </Button>
               </div>
-            </div>
-
-            {sessionWindowWarning ? (
-              <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-3.5 text-xs text-amber-950 dark:text-amber-200 space-y-2">
-                <p className="font-semibold">{sessionWindowWarning}</p>
-                {kapsoWaMeLink ? (
-                  <p>
-                    👉{" "}
-                    <a
-                      href={kapsoWaMeLink}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="underline font-semibold"
-                    >
-                      Cliquez ici pour ouvrir WhatsApp vers{" "}
-                      {connectedKapsoSender?.displayPhoneNumber ||
-                        "votre numéro Kapso"}{" "}
-                      et envoyer « Bonjour »
-                    </a>
-                    , puis recliquez immédiatement sur{" "}
-                    <strong>Tester WhatsApp (Kapso)</strong>.
-                  </p>
-                ) : null}
-              </div>
-            ) : null}
-
-            <div className="rounded-xl border bg-muted/40 p-3.5 text-xs space-y-2">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="font-semibold">
-                  URL Webhook à configurer dans Kapso Dashboard (événement{" "}
-                  <code>whatsapp.message.received</code>) :
-                </span>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => {
-                    navigator.clipboard?.writeText(webhookUrl);
-                    toast.success("URL Webhook Kapso copiée !");
-                  }}
-                >
-                  <Copy className="h-3.5 w-3.5" />
-                  Copier l&apos;URL
-                </Button>
-              </div>
-              <code className="block rounded bg-background px-2.5 py-1.5 text-[11px] break-all border">
-                {webhookUrl}
-              </code>
             </div>
           </CardContent>
         </Card>
@@ -694,54 +579,49 @@ export default function AutomationPage() {
           ) : (
             <Save className="h-4 w-4" />
           )}
-          Enregistrer les règles d&apos;automatisation &amp; WhatsApp
+          Enregistrer les règles d&apos;automatisation &amp; Validation Email
         </Button>
       </form>
 
-      {/* Recent WhatsApp Approvals */}
-      {whatsappApprovals.length > 0 && (
+      {/* Recent Email Approvals */}
+      {emailApprovals.length > 0 && (
         <Card>
           <CardHeader>
             <CardTitle className="text-base">
-              Historique des Validations WhatsApp (Kapso)
+              Historique des Validations par Email
             </CardTitle>
             <CardDescription>
-              Suivi des codes d&apos;approbation envoyés et des emails expédiés
-              après validation
+              Emails de validation envoyés et statut d&apos;approbation
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-2">
-            {whatsappApprovals.map((wa) => (
+            {emailApprovals.map((em) => (
               <div
-                key={wa.id}
+                key={em.id}
                 className="rounded-xl border p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
               >
                 <div className="flex items-center gap-2 flex-wrap">
                   <Badge
                     variant={
-                      wa.status === "approved_and_sent"
+                      em.status === "approved"
                         ? "success"
-                        : wa.status === "rejected" || wa.status === "failed"
+                        : em.status === "rejected" ||
+                            em.status === "invalidated"
                           ? "destructive"
                           : "warning"
                     }
                   >
-                    {wa.status}
+                    {em.status}
                   </Badge>
                   <span className="font-mono font-semibold">
-                    #{wa.approval_code}
+                    #{em.approval_code}
                   </span>
                   <span className="text-muted-foreground">
-                    +{wa.recipient_phone}
+                    {em.approver_email}
                   </span>
-                  {wa.error_message && (
-                    <span className="text-destructive">
-                      • {wa.error_message}
-                    </span>
-                  )}
                 </div>
                 <span className="text-muted-foreground">
-                  {formatShortDate(wa.created_at)}
+                  {formatShortDate(em.created_at)}
                 </span>
               </div>
             ))}

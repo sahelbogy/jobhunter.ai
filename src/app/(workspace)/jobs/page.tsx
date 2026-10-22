@@ -70,7 +70,7 @@ export default function FindJobsPage() {
   const [previewingUrl, setPreviewingUrl] = useState(false);
   const [importingOffer, setImportingOffer] = useState(false);
 
-  // Multi-select batch automation + Kapso WhatsApp approval state
+  // Multi-select batch automation + Email Approval state
   const [selectedJobIds, setSelectedJobIds] = useState<string[]>([]);
   const [executionTiming, setExecutionTiming] = useState<
     "now" | "daily" | "specific_date"
@@ -79,8 +79,8 @@ export default function FindJobsPage() {
     const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
     return tomorrow.toISOString().slice(0, 10);
   });
-  const [sendWhatsAppApproval, setSendWhatsAppApproval] = useState(true);
-  const [whatsappPhone, setWhatsappPhone] = useState("");
+  const [sendEmailApproval, setSendEmailApproval] = useState(true);
+  const [approverEmail, setApproverEmail] = useState("");
   const [batchRunning, setBatchRunning] = useState(false);
 
   async function loadJobs(activeLocs: string[] = locations) {
@@ -117,13 +117,17 @@ export default function FindJobsPage() {
     }
   }
 
-  async function loadWhatsAppDefault() {
+  async function loadAutomationDefaults() {
     try {
       const res = await fetch("/api/automation");
       if (res.ok) {
         const d = await res.json();
-        if (d.settings?.whatsapp_phone_number) {
-          setWhatsappPhone(d.settings.whatsapp_phone_number);
+        const emailFromSettings =
+          d.settings?.approval_email_recipient ||
+          d.emailConnection?.email_address ||
+          "";
+        if (emailFromSettings) {
+          setApproverEmail(emailFromSettings);
         }
         if (
           Array.isArray(d.settings?.search_locations) &&
@@ -144,7 +148,7 @@ export default function FindJobsPage() {
   }
 
   useEffect(() => {
-    loadWhatsAppDefault();
+    loadAutomationDefaults();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -350,12 +354,6 @@ export default function FindJobsPage() {
       toast.error("Select at least 1 job offer first.");
       return;
     }
-    if (sendWhatsAppApproval && !whatsappPhone.trim()) {
-      toast.error(
-        "Enter your WhatsApp number (e.g. +212612345678) to receive Kapso approval cards, or uncheck WhatsApp."
-      );
-      return;
-    }
 
     setBatchRunning(true);
     try {
@@ -367,8 +365,8 @@ export default function FindJobsPage() {
           executionTiming,
           scheduledDate:
             executionTiming === "specific_date" ? scheduledDate : null,
-          sendWhatsAppApproval,
-          whatsappPhone: whatsappPhone.trim() || undefined,
+          sendEmailApproval,
+          approverEmail: approverEmail.trim() || undefined,
           languageOverride:
             languageFilter === "fr" || languageFilter === "en"
               ? languageFilter
@@ -383,14 +381,16 @@ export default function FindJobsPage() {
 
       if (data.scheduledForDate) {
         toast.success(
-          `✅ ${data.preparedCount} candidatures (mail + PDF) générées et programmées pour envoi WhatsApp le ${data.scheduledForDate} !`
+          `✅ ${data.preparedCount} candidatures (mail + PDF) générées et programmées pour validation par email le ${data.scheduledForDate} !`
         );
-      } else if (data.whatsappSentCount > 0) {
+      } else if (data.emailApprovalSentCount > 0) {
         toast.success(
-          `🚀 ${data.preparedCount} candidatures préparées et ${data.whatsappSentCount} envoyées sur votre WhatsApp via Kapso pour validation !`
+          `🚀 ${data.preparedCount} candidatures préparées et ${data.emailApprovalSentCount} envoyées dans votre boîte email pour validation !`
         );
       } else {
-        const firstNote = data.prepared?.find((p: any) => p.whatsappNote)?.whatsappNote;
+        const firstNote = data.prepared?.find(
+          (p: any) => p.emailApprovalNote
+        )?.emailApprovalNote;
         toast.success(
           `✅ ${data.preparedCount} candidatures générées dans Approval Queue.${
             firstNote ? ` (${firstNote})` : ""
@@ -419,7 +419,7 @@ export default function FindJobsPage() {
               <CardDescription>
                 Strict regional filtering (e.g., Morocco-only excludes France &
                 other countries), LinkedIn searches matched to your saved CV, and
-                batch WhatsApp (Kapso) approval-to-email automation
+                batch Email Approval automation
               </CardDescription>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -571,8 +571,8 @@ export default function FindJobsPage() {
                 ? ` (${profileSummary.professional_title})`
                 : ""}{" "}
               et vos régions sélectionnées ({locations.join(", ")}), sans scraping
-              interdit. Importez vos offres choisies pour les scorer et les
-              envoyer automatiquement sur WhatsApp (Kapso).
+              interdit. Importez vos offres choisies pour les scorer et recevoir
+              les candidatures par email pour validation.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-5">
@@ -692,15 +692,15 @@ export default function FindJobsPage() {
         </Card>
       )}
 
-      {/* Batch Automation + Kapso WhatsApp Approval Bar */}
-      <Card className="border-violet-500/40 bg-violet-500/[0.04]">
+      {/* Batch Automation + Email Approval Bar */}
+      <Card className="border-blue-500/40 bg-blue-500/[0.04]">
         <CardContent className="p-4 space-y-3">
           <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
             <div className="space-y-0.5">
               <div className="flex items-center gap-2 flex-wrap">
-                <MessageSquareShare className="h-4 w-4 text-violet-600" />
+                <MessageSquareShare className="h-4 w-4 text-blue-600" />
                 <span className="text-sm font-semibold">
-                  Postulation Automatisée en Lot + Validation WhatsApp (Kapso)
+                  Postulation Automatisée en Lot + Validation par Email
                 </span>
                 <Badge variant="secondary">
                   {selectedJobIds.length} offre(s) sélectionnée(s)
@@ -708,10 +708,10 @@ export default function FindJobsPage() {
               </div>
               <p className="text-xs text-muted-foreground">
                 Sélectionnez p.ex. 5 offres : l&apos;IA prépare le mail + Lettre de
-                Motivation PDF, vous les envoie sur WhatsApp via{" "}
-                <strong>Kapso</strong>, et dès votre clic sur{" "}
-                <strong>Approuver &amp; Envoyer</strong>, l&apos;email part
-                directement depuis votre boîte mail connectée.
+                Motivation PDF, vous les envoie dans votre boîte email avec les
+                boutons <strong>Approuver &amp; Envoyer</strong> /{" "}
+                <strong>Refuser</strong>, et expédie l&apos;email au recruteur dès
+                votre validation.
               </p>
             </div>
 
@@ -748,7 +748,7 @@ export default function FindJobsPage() {
                   className="flex h-9 w-full rounded-lg border border-input bg-background px-2.5 text-xs"
                 >
                   <option value="now">
-                    Immédiat (Préparer &amp; envoyer sur WhatsApp)
+                    Immédiat (Préparer &amp; envoyer par Email pour validation)
                   </option>
                   <option value="daily">
                     Chaque jour (Activer le lot quotidien 07:00 UTC)
@@ -763,7 +763,7 @@ export default function FindJobsPage() {
                 <div className="space-y-1">
                   <Label className="text-xs flex items-center gap-1">
                     <CalendarClock className="h-3.5 w-3.5" />
-                    Jour précis d&apos;envoi WhatsApp
+                    Jour précis d&apos;envoi par Email
                   </Label>
                   <Input
                     type="date"
@@ -778,17 +778,18 @@ export default function FindJobsPage() {
                 <Label className="text-xs flex items-center gap-2">
                   <input
                     type="checkbox"
-                    checked={sendWhatsAppApproval}
-                    onChange={(e) => setSendWhatsAppApproval(e.target.checked)}
-                    className="h-3.5 w-3.5 accent-violet-600"
+                    checked={sendEmailApproval}
+                    onChange={(e) => setSendEmailApproval(e.target.checked)}
+                    className="h-3.5 w-3.5 accent-blue-600"
                   />
-                  Numéro WhatsApp (Kapso)
+                  Email de validation
                 </Label>
                 <Input
-                  placeholder="+212612345678"
-                  value={whatsappPhone}
-                  disabled={!sendWhatsAppApproval}
-                  onChange={(e) => setWhatsappPhone(e.target.value)}
+                  type="email"
+                  placeholder="votre.nom@gmail.com (auto)"
+                  value={approverEmail}
+                  disabled={!sendEmailApproval}
+                  onChange={(e) => setApproverEmail(e.target.value)}
                   className="h-9 text-xs"
                 />
               </div>
@@ -881,7 +882,7 @@ export default function FindJobsPage() {
                         type="button"
                         onClick={() => toggleJobSelected(job.id)}
                         className="mt-1 text-muted-foreground hover:text-primary"
-                        title="Select offer for batch WhatsApp automation"
+                        title="Select offer for batch Email Approval automation"
                       >
                         {isSelected ? (
                           <CheckSquare className="h-5 w-5 text-violet-600" />

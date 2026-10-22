@@ -1,10 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { requireAuthenticatedUser } from "@/lib/security/auth-guard";
-import {
-  getKapsoConfigStatus,
-  normalizeWhatsAppPhone,
-} from "@/lib/whatsapp/kapso";
+import { validateRecipientEmail } from "@/lib/security/sanitize";
+import { createAdminSupabaseClient } from "@/lib/supabase/admin";
 
 const AutomationSettingsSchema = z.object({
   is_enabled: z.boolean(),
@@ -33,10 +31,10 @@ const AutomationSettingsSchema = z.object({
     .optional(),
   email_language: z.enum(["auto", "fr", "en"]),
   notify_in_app: z.boolean().default(true),
-  notify_email: z.boolean().default(false),
-  whatsapp_enabled: z.boolean().optional().default(false),
-  whatsapp_phone_number: z.string().max(30).optional().default(""),
-  auto_send_on_whatsapp_approval: z.boolean().optional().default(true),
+  notify_email: z.boolean().default(true),
+  email_approval_enabled: z.boolean().optional().default(true),
+  approval_email_recipient: z.string().max(180).optional().default(""),
+  auto_send_on_email_approval: z.boolean().optional().default(true),
 });
 
 export async function GET() {
@@ -53,32 +51,48 @@ export async function GET() {
   if (!settings) {
     const { data: created } = await supabase
       .from("automation_settings")
-      .upsert({ user_id: user.id }, { onConflict: "user_id" })
+      .upsert(
+        {
+          user_id: user.id,
+          approval_email_recipient: user.email ?? "",
+        },
+        { onConflict: "user_id" }
+      )
       .select("*")
       .single();
     settings = created;
   }
 
-  const [{ data: runs }, { data: whatsappApprovals }] = await Promise.all([
-    supabase
-      .from("automation_runs")
-      .select("*")
-      .eq("user_id", user.id)
-      .order("started_at", { ascending: false })
-      .limit(25),
-    supabase
-      .from("whatsapp_approval_requests")
-      .select("*")
-      .eq("user_id", user.id)
-      .order("created_at", { ascending: false })
-      .limit(15),
-  ]);
+  const admin = createAdminSupabaseClient();
+  const [{ data: runs }, { data: emailApprovals }, { data: emailConnection }] =
+    await Promise.all([
+      supabase
+        .from("automation_runs")
+        .select("*")
+        .eq("user_id", user.id)
+        .order("started_at", { ascending: false })
+        .limit(25),
+      supabase
+        .from("email_approval_requests")
+        .select(
+          "id, application_id, approval_code, approver_email, email_message_id, status, expires_at, responded_at, created_at"
+        )
+        .eq("user_id", user.id)
+        .order("created_at", { ascending: false })
+        .limit(15),
+      admin
+        .from("email_connections")
+        .select("provider, email_address, is_active")
+        .eq("user_id", user.id)
+        .eq("is_active", true)
+        .maybeSingle(),
+    ]);
 
   return NextResponse.json({
     settings,
     runs: runs ?? [],
-    whatsappApprovals: whatsappApprovals ?? [],
-    kapso: getKapsoConfigStatus(),
+    emailApprovals: emailApprovals ?? [],
+    emailConnection: emailConnection ?? null,
   });
 }
 
@@ -90,19 +104,19 @@ export async function PUT(request: NextRequest) {
   try {
     const body = AutomationSettingsSchema.parse(await request.json());
 
-    let cleanedPhone = body.whatsapp_phone_number?.trim() || "";
-    if (cleanedPhone) {
-      const norm = normalizeWhatsAppPhone(cleanedPhone);
-      if (!norm) {
+    let cleanedEmail = body.approval_email_recipient?.trim() || "";
+    if (cleanedEmail) {
+      const check = validateRecipientEmail(cleanedEmail);
+      if (!check.valid) {
         return NextResponse.json(
           {
             error:
-              "Invalid WhatsApp phone number. Use international E.164 format (e.g. +212612345678).",
+              "Entrez une adresse email de validation valide (ex: votre adresse Gmail).",
           },
           { status: 400 }
         );
       }
-      cleanedPhone = `+${norm}`;
+      cleanedEmail = check.normalized;
     }
 
     if (
@@ -132,7 +146,7 @@ export async function PUT(request: NextRequest) {
           user_id: user.id,
           ...body,
           scheduled_date: body.scheduled_date ?? null,
-          whatsapp_phone_number: cleanedPhone,
+          approval_email_recipient: cleanedEmail,
           fallback_ai_provider: body.fallback_ai_provider ?? null,
           next_run_at: nextRun,
         },
@@ -152,7 +166,7 @@ export async function PUT(request: NextRequest) {
         error:
           err instanceof Error
             ? err.message
-            : "Invalid automation configuration.",
+            : "Failed to save automation settings.",
       },
       { status: 400 }
     );

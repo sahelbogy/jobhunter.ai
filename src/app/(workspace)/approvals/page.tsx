@@ -187,21 +187,21 @@ export default function ApprovalQueuePage() {
     }
   }
 
-  async function handleSendToWhatsApp(appId: string) {
+  async function handleSendEmailApproval(appId: string) {
     setBusyId(appId);
     try {
-      const res = await fetch("/api/whatsapp/kapso/test", {
+      const res = await fetch("/api/email/approval-test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ applicationId: appId }),
       });
       const data = await res.json();
       if (!res.ok) {
-        toast.error(data.error || "Could not send approval card to WhatsApp.");
+        toast.error(data.error || "Could not send approval email.");
         return;
       }
       toast.success(
-        `Sent to WhatsApp via Kapso (#${data.approvalCode})! Tap Approve & Send on WhatsApp to dispatch email.`
+        `Email de validation envoyé (#${data.approvalCode}) à ${data.approverEmail} ! Cliquez sur Approuver & Envoyer dans votre email.`
       );
       await loadQueue();
     } finally {
@@ -427,9 +427,12 @@ export default function ApprovalQueuePage() {
                             Scheduled: {app.scheduled_for_date}
                           </Badge>
                         )}
-                        {app.whatsapp_notified_at && (
-                          <Badge variant="outline" className="border-violet-500/40 text-violet-700 dark:text-violet-300">
-                            WhatsApp Sent
+                        {app.approval_email_sent_at && (
+                          <Badge
+                            variant="outline"
+                            className="border-blue-500/40 text-blue-700 dark:text-blue-300"
+                          >
+                            Approval Email Sent
                           </Badge>
                         )}
                       </div>
@@ -540,10 +543,10 @@ export default function ApprovalQueuePage() {
                         size="sm"
                         variant="outline"
                         disabled={isBusy || app.approval_status === "sent"}
-                        onClick={() => handleSendToWhatsApp(app.id)}
+                        onClick={() => handleSendEmailApproval(app.id)}
                       >
-                        <MessageSquareShare className="h-3.5 w-3.5 text-violet-600" />
-                        WhatsApp (Kapso)
+                        <MessageSquareShare className="h-3.5 w-3.5 text-blue-600" />
+                        Recevoir par Email
                       </Button>
                     </div>
 

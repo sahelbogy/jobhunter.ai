@@ -140,13 +140,12 @@ Verified test suites:
 - `tests/jobs-companies-matching.test.ts` — URL normalization & cross-source deduplication, mocked Remotive/Arbeitnow/SmartRecruiters feeds, verified company channel handling, 0–100 multi-factor compatibility scoring & skill gap explanations.
 - `tests/ai-providers-and-email-delivery.test.ts` — AI fallback rules (blocking silent or unauthorized paid fallback), Gmail OAuth 2.0 state/URL/token encryption, RFC 2822 multipart MIME attachment encoding, blocking unapproved & duplicate sends.
 - `tests/auth-rls-tracker-analytics.test.ts` — Protected route middleware redirects, RLS & private storage bucket policy verification, RFC 4180 CSV export, real database-backed analytics aggregation.
-- `tests/morocco-linkedin-kapso.test.ts` — Strict Morocco-only (`Maroc`) geographic boundary filtering (excluding France/EU/Worldwide when only Morocco is selected), LinkedIn profile-matched search URLs & offer import, and Kapso WhatsApp HMAC-SHA256 webhook verification + interactive button approval -> immediate email dispatch.
+- `tests/morocco-linkedin-email-approval.test.ts` — Strict Morocco-only (`Maroc`) geographic boundary filtering (excluding France/EU/Worldwide when only Morocco is selected), LinkedIn profile-matched search URLs & offer import, and HMAC-SHA256 Email Approval token verification + edit tamper invalidation + immediate employer email dispatch.
 
-### Kapso WhatsApp Approval-to-Email Setup
-1. Create a WhatsApp API key and connect your WhatsApp Business number in [Kapso](https://kapso.ai).
-2. Set `KAPSO_API_KEY`, `KAPSO_PHONE_NUMBER_ID`, and `KAPSO_WEBHOOK_SECRET` in Vercel Environment Variables.
-3. In Kapso Dashboard -> **Webhooks**, add endpoint `https://jobhunterai-five.vercel.app/api/whatsapp/kapso/webhook`, subscribe to `whatsapp.message.received`, and enter the exact `KAPSO_WEBHOOK_SECRET`.
-4. In `/jobs` or `/automation`, select up to 10 offers (e.g., 5 offers) and choose **Immédiat**, **Chaque jour**, or **Un jour précis**: AI generates the tailored email + Cover Letter PDF, sends both to your WhatsApp via Kapso with **Approuver & Envoyer** / **Refuser** buttons, and dispatches the email directly from your connected Gmail/SMTP inbox upon your approval.
+### Cryptographic Email Approval Loop Setup (100% Free)
+1. In **Email Center (`/emails`)**, connect your Gmail in 10 seconds using a free 16-character [Gmail App Password](https://myaccount.google.com/apppasswords) (encrypted AES-256-GCM at rest) or Gmail OAuth 2.0.
+2. In **Account Settings (`/settings`)**, paste your free [Groq Cloud API key](https://console.groq.com/keys) and/or free [Google Gemini AI Studio key](https://aistudio.google.com/apikey) (encrypted AES-256-GCM at rest).
+3. In `/jobs` or `/automation`, select up to 10 offers (e.g., 5 offers) and choose **Immédiat**, **Chaque jour**, or **Un jour précis**: AI generates the tailored email + Cover Letter PDF, sends a signed HTML Approval Email (with the Cover Letter PDF attached) to your inbox, and dispatches the application directly to the employer from your connected inbox as soon as you confirm **Approuver & Envoyer**.
 
 ### Safe End-to-End Integration Testing Procedure
 To test live email sending safely without ever emailing a real employer:

@@ -30,6 +30,10 @@ function EmailsInner() {
   const [logs, setLogs] = useState<Array<any>>([]);
   const [oauthConfigured, setOauthConfigured] = useState(false);
   const [smtpConfigured, setSmtpConfigured] = useState(false);
+  const [smtpEmail, setSmtpEmail] = useState("");
+  const [smtpAppPassword, setSmtpAppPassword] = useState("");
+  const [smtpHost, setSmtpHost] = useState("");
+  const [smtpPort, setSmtpPort] = useState(465);
   const [dailyLimit, setDailyLimit] = useState(25);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -101,14 +105,23 @@ function EmailsInner() {
       const res = await fetch("/api/email/smtp", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ daily_send_limit: Number(dailyLimit) }),
+        body: JSON.stringify({
+          email_address: smtpEmail.trim() || undefined,
+          app_password: smtpAppPassword.trim() || undefined,
+          smtp_host: smtpHost.trim() || undefined,
+          smtp_port: Number(smtpPort) || undefined,
+          daily_send_limit: Number(dailyLimit),
+        }),
       });
       const data = await res.json();
       if (!res.ok) {
         toast.error(data.error || "Failed to enable SMTP sender.");
         return;
       }
-      toast.success("Authenticated SMTP sender enabled!");
+      setSmtpAppPassword("");
+      toast.success(
+        `Boîte email connectée et vérifiée (${data.connection?.email_address}) !`
+      );
       await loadEmailCenter();
     } finally {
       setBusy(false);
@@ -223,8 +236,8 @@ function EmailsInner() {
           </CardContent>
         </Card>
 
-        {/* Optional Authenticated SMTP Card */}
-        <Card>
+        {/* Direct Gmail App Password / SMTP Card */}
+        <Card className="border-violet-500/40">
           <CardHeader>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2.5">
@@ -233,20 +246,17 @@ function EmailsInner() {
                 </div>
                 <div>
                   <CardTitle className="text-base">
-                    Optional Authenticated SMTP
+                    Gmail App Password / SMTP Direct (100% Gratuit)
                   </CardTitle>
                   <CardDescription>
-                    Server-configured SMTP relay (<code>SMTP_HOST</code>,{" "}
-                    <code>SMTP_USER</code>, <code>SMTP_PASS</code>)
+                    Connexion directe en 10s sans configurer Google Cloud OAuth
                   </CardDescription>
                 </div>
               </div>
               {smtpActive ? (
-                <Badge variant="success">Active</Badge>
-              ) : smtpConfigured ? (
-                <Badge variant="secondary">Ready</Badge>
+                <Badge variant="success">Connecté</Badge>
               ) : (
-                <Badge variant="outline">Requires Env Config</Badge>
+                <Badge variant="secondary">100% Gratuit</Badge>
               )}
             </div>
           </CardHeader>
@@ -254,11 +264,13 @@ function EmailsInner() {
             {smtpActive ? (
               <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4 space-y-2">
                 <div className="font-semibold text-emerald-800 dark:text-emerald-300">
-                  Active SMTP sender: {connection.email_address}
+                  Boîte active : {connection.email_address}
                 </div>
                 <p className="text-muted-foreground">
-                  Daily cap: {connection.sends_today ?? 0} /{" "}
-                  {connection.daily_send_limit ?? 25} sent today
+                  Quota journalier : {connection.sends_today ?? 0} /{" "}
+                  {connection.daily_send_limit ?? 25} envoyés aujourd&apos;hui •
+                  Utilisée pour vous envoyer vos emails de validation ET envoyer
+                  vos candidatures approuvées.
                 </p>
                 <Button
                   size="sm"
@@ -266,35 +278,81 @@ function EmailsInner() {
                   onClick={handleDisconnect}
                   disabled={busy}
                 >
-                  Disconnect SMTP
+                  Déconnecter
                 </Button>
               </div>
             ) : (
               <form onSubmit={handleEnableSmtp} className="space-y-3">
                 <p className="text-muted-foreground leading-relaxed">
-                  Uses server-only environment credentials (
-                  <code>SMTP_HOST</code>, <code>SMTP_PORT</code>,{" "}
-                  <code>SMTP_USER</code>, <code>SMTP_PASS</code>,{" "}
-                  <code>SMTP_FROM</code>) so SMTP secrets never touch browser
-                  memory.
+                  Créez gratuitement un{" "}
+                  <a
+                    href="https://myaccount.google.com/apppasswords"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="font-semibold text-blue-600 dark:text-blue-400 underline"
+                  >
+                    Mot de passe d&apos;application Gmail (16 caractères)
+                  </a>{" "}
+                  et collez-le ci-dessous (chiffré AES-256-GCM côté serveur).
                 </p>
-                <div className="max-w-xs space-y-1">
-                  <Label className="text-xs">Daily Send Cap (1–100)</Label>
-                  <Input
-                    type="number"
-                    min={1}
-                    max={100}
-                    value={dailyLimit}
-                    onChange={(e) => setDailyLimit(Number(e.target.value))}
-                  />
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div className="space-y-1">
+                    <Label className="text-xs">Votre adresse email</Label>
+                    <Input
+                      type="email"
+                      placeholder="votre.nom@gmail.com"
+                      value={smtpEmail}
+                      onChange={(e) => setSmtpEmail(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">
+                      Mot de passe d&apos;application (16 car.)
+                    </Label>
+                    <Input
+                      type="password"
+                      autoComplete="off"
+                      placeholder="xxxx xxxx xxxx xxxx"
+                      value={smtpAppPassword}
+                      onChange={(e) => setSmtpAppPassword(e.target.value)}
+                    />
+                  </div>
                 </div>
-                <Button
-                  type="submit"
-                  size="sm"
-                  variant="outline"
-                  disabled={busy}
-                >
-                  Enable Server SMTP Relay
+                <div className="grid grid-cols-3 gap-2.5">
+                  <div className="space-y-1">
+                    <Label className="text-xs">Hôte SMTP (auto Gmail)</Label>
+                    <Input
+                      placeholder="smtp.gmail.com"
+                      value={smtpHost}
+                      onChange={(e) => setSmtpHost(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Port</Label>
+                    <Input
+                      type="number"
+                      value={smtpPort}
+                      onChange={(e) => setSmtpPort(Number(e.target.value))}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Quota / jour</Label>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={100}
+                      value={dailyLimit}
+                      onChange={(e) => setDailyLimit(Number(e.target.value))}
+                    />
+                  </div>
+                </div>
+                <Button type="submit" size="sm" disabled={busy}>
+                  {busy ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Lock className="h-3.5 w-3.5" />
+                  )}
+                  Vérifier &amp; Connecter ma Boîte Email
                 </Button>
               </form>
             )}

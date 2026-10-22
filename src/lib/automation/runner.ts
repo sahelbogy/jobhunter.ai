@@ -5,10 +5,9 @@ import { runJobDiscoveryForUser } from "@/lib/jobs/discovery";
 import { generateTailoredApplicationWithAi } from "@/lib/documents/application-generator";
 import { generateCoverLetterPdfBuffer } from "@/lib/documents/cover-letter-pdf";
 import {
-  dispatchApplicationToWhatsAppForApproval,
-  normalizeWhatsAppPhone,
-  type DispatchWhatsAppApprovalResult,
-} from "@/lib/whatsapp/kapso";
+  dispatchApplicationToEmailForApproval,
+  type DispatchEmailApprovalResult,
+} from "@/lib/email/approval-loop";
 import { buildVerifiedFallbackApplicationPackage } from "@/lib/documents/fallback-draft";
 
 export interface AutomationRunSummary {
@@ -200,36 +199,34 @@ export async function executeAutomationRunForUser(params: {
 
     // 5. Generate drafts for top un-applied matches (NEVER auto-sends without human approval!)
     let draftsGenerated = 0;
-    let whatsappApprovalsSent = 0;
-    const whatsappEnabled = Boolean(settings?.whatsapp_enabled);
-    const whatsappPhone = normalizeWhatsAppPhone(
-      settings?.whatsapp_phone_number ?? ""
-    );
+    let emailApprovalsSent = 0;
+    const emailApprovalEnabled = settings?.email_approval_enabled !== false;
+    const approverEmail = settings?.approval_email_recipient?.trim() || null;
 
     // 5a. First dispatch any pre-scheduled batch applications due today (`scheduled_for_date <= today`)
     const todayUtc = new Date().toISOString().slice(0, 10);
-    if (whatsappEnabled && whatsappPhone) {
+    if (emailApprovalEnabled) {
       const { data: dueScheduledApps } = await adminSupabase
         .from("applications")
         .select("id, job_title, company_name")
         .eq("user_id", userId)
         .eq("approval_status", "awaiting_approval")
-        .is("whatsapp_notified_at", null)
+        .is("approval_email_sent_at", null)
         .not("scheduled_for_date", "is", null)
         .lte("scheduled_for_date", todayUtc)
         .limit(10);
 
       for (const dueApp of dueScheduledApps ?? []) {
-        const waRes = await dispatchApplicationToWhatsAppForApproval({
+        const emRes = await dispatchApplicationToEmailForApproval({
           adminSupabase,
           userId,
           applicationId: dueApp.id,
-          whatsappPhone,
-        }).catch(() => ({ dispatched: false, reason: "Kapso error" }));
-        if (waRes.dispatched) {
-          whatsappApprovalsSent += 1;
+          approverEmail,
+        }).catch(() => ({ dispatched: false, reason: "Email approval error" }));
+        if (emRes.dispatched) {
+          emailApprovalsSent += 1;
           log(
-            `Sent due scheduled application '${dueApp.job_title}' (${dueApp.company_name}) to WhatsApp via Kapso.`
+            `Sent due scheduled application '${dueApp.job_title}' (${dueApp.company_name}) to inbox for email approval.`
           );
         }
       }
@@ -391,26 +388,26 @@ export async function executeAutomationRunForUser(params: {
               `Queued application draft for '${targetJob.title}' at '${targetJob.company_name}' in Approval Queue.`
             );
 
-            if (whatsappEnabled && whatsappPhone) {
-              const waRes = await dispatchApplicationToWhatsAppForApproval({
+            if (emailApprovalEnabled) {
+              const emRes = await dispatchApplicationToEmailForApproval({
                 adminSupabase,
                 userId,
                 applicationId: createdApp.id,
-                whatsappPhone,
+                approverEmail,
               }).catch(
-                (): DispatchWhatsAppApprovalResult => ({
+                (): DispatchEmailApprovalResult => ({
                   dispatched: false,
-                  reason: "Kapso error",
+                  reason: "Email approval error",
                 })
               );
 
-              if (waRes.dispatched) {
-                whatsappApprovalsSent += 1;
+              if (emRes.dispatched) {
+                emailApprovalsSent += 1;
                 log(
-                  `Dispatched WhatsApp approval card (#${waRes.approvalCode}) via Kapso for '${targetJob.title}'.`
+                  `Dispatched Email Approval (#${emRes.approvalCode}) to ${emRes.approverEmail} for '${targetJob.title}'.`
                 );
-              } else if (waRes.reason) {
-                log(`WhatsApp dispatch skipped: ${waRes.reason}`);
+              } else if (emRes.reason) {
+                log(`Email approval dispatch skipped: ${emRes.reason}`);
               }
             }
           }
@@ -425,20 +422,20 @@ export async function executeAutomationRunForUser(params: {
     }
 
     // 6. Notify user when new matches or drafts are ready
-    let notificationsSent = whatsappApprovalsSent;
+    let notificationsSent = emailApprovalsSent;
     if (
       settings?.notify_in_app !== false &&
-      (qualifiedJobs.length > 0 || draftsGenerated > 0 || whatsappApprovalsSent > 0)
+      (qualifiedJobs.length > 0 || draftsGenerated > 0 || emailApprovalsSent > 0)
     ) {
       await adminSupabase.from("notifications").insert({
         user_id: userId,
         title:
-          whatsappApprovalsSent > 0
-            ? `${whatsappApprovalsSent} Offer(s) Sent to WhatsApp for Approval`
+          emailApprovalsSent > 0
+            ? `${emailApprovalsSent} Offer(s) Sent to Your Email for Approval`
             : draftsGenerated > 0
               ? `${draftsGenerated} Application Draft(s) Ready for Approval`
               : `${qualifiedJobs.length} High-Match Job Opportunities Found`,
-        message: `Automation discovered ${discovery.insertedOrUpdatedCount} roles (${qualifiedJobs.length} scoring ${minScore}%+), queued ${draftsGenerated} tailored draft(s), and sent ${whatsappApprovalsSent} WhatsApp approval card(s).`,
+        message: `Automation discovered ${discovery.insertedOrUpdatedCount} roles (${qualifiedJobs.length} scoring ${minScore}%+), queued ${draftsGenerated} tailored draft(s), and sent ${emailApprovalsSent} approval email(s) to your inbox.`,
         category: "automation",
         link_url: draftsGenerated > 0 ? "/approvals" : "/matching",
       });

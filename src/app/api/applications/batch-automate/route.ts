@@ -3,8 +3,8 @@ import { z } from "zod";
 import { requireAuthenticatedUser } from "@/lib/security/auth-guard";
 import { createAdminSupabaseClient } from "@/lib/supabase/admin";
 import { checkRateLimit } from "@/lib/security/rate-limit";
+import { validateRecipientEmail } from "@/lib/security/sanitize";
 import { prepareSingleJobApplicationForUser } from "@/lib/automation/prepare-application";
-import { normalizeWhatsAppPhone } from "@/lib/whatsapp/kapso";
 import type { AiProviderId } from "@/types/domain";
 
 const BatchAutomateSchema = z.object({
@@ -15,8 +15,8 @@ const BatchAutomateSchema = z.object({
     .regex(/^\d{4}-\d{2}-\d{2}$/, "scheduledDate must be YYYY-MM-DD")
     .optional()
     .nullable(),
-  sendWhatsAppApproval: z.boolean().default(true),
-  whatsappPhone: z.string().max(30).optional(),
+  sendEmailApproval: z.boolean().default(true),
+  approverEmail: z.string().max(180).optional(),
   languageOverride: z.enum(["auto", "fr", "en"]).default("auto"),
 });
 
@@ -44,10 +44,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const adminSupabase = createAdminSupabaseClient();
+
     const [
       { data: profile },
       { data: activeResume },
       { data: autoSettings },
+      { data: emailConn },
       { data: jobs },
     ] = await Promise.all([
       supabase.from("profiles").select("*").eq("id", user.id).maybeSingle(),
@@ -61,6 +64,12 @@ export async function POST(request: NextRequest) {
         .from("automation_settings")
         .select("*")
         .eq("user_id", user.id)
+        .maybeSingle(),
+      adminSupabase
+        .from("email_connections")
+        .select("email_address, is_active")
+        .eq("user_id", user.id)
+        .eq("is_active", true)
         .maybeSingle(),
       supabase
         .from("jobs")
@@ -84,18 +93,23 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const effectivePhone =
-      parsed.whatsappPhone?.trim() ||
-      autoSettings?.whatsapp_phone_number?.trim() ||
-      profile?.phone?.trim() ||
+    const rawApprover =
+      parsed.approverEmail?.trim() ||
+      autoSettings?.approval_email_recipient?.trim() ||
+      emailConn?.email_address?.trim() ||
+      profile?.email?.trim() ||
+      user.email ||
       "";
-    const normalizedPhone = normalizeWhatsAppPhone(effectivePhone);
+    const approverCheck = validateRecipientEmail(rawApprover);
+    const normalizedApprover = approverCheck.valid
+      ? approverCheck.normalized
+      : null;
 
-    // Persist WhatsApp & schedule preferences if requested for daily or specific_date
+    // Persist Email Approval & schedule preferences if requested
     if (
       parsed.executionTiming === "daily" ||
       parsed.executionTiming === "specific_date" ||
-      (parsed.sendWhatsAppApproval && normalizedPhone)
+      (parsed.sendEmailApproval && normalizedApprover)
     ) {
       const settingsPatch: Record<string, unknown> = {
         user_id: user.id,
@@ -112,9 +126,9 @@ export async function POST(request: NextRequest) {
         settingsPatch.schedule_mode = "specific_date";
         settingsPatch.scheduled_date = parsed.scheduledDate;
       }
-      if (parsed.sendWhatsAppApproval && normalizedPhone) {
-        settingsPatch.whatsapp_enabled = true;
-        settingsPatch.whatsapp_phone_number = `+${normalizedPhone}`;
+      if (parsed.sendEmailApproval && normalizedApprover) {
+        settingsPatch.email_approval_enabled = true;
+        settingsPatch.approval_email_recipient = normalizedApprover;
       }
 
       await supabase
@@ -122,7 +136,6 @@ export async function POST(request: NextRequest) {
         .upsert(settingsPatch, { onConflict: "user_id" });
     }
 
-    const adminSupabase = createAdminSupabaseClient();
     const primaryProvider = (autoSettings?.ai_provider ?? "groq") as AiProviderId;
     const fallbackProvider = (autoSettings?.fallback_ai_provider ??
       null) as AiProviderId | null;
@@ -165,9 +178,10 @@ export async function POST(request: NextRequest) {
           fallbackProvider,
           languageOverride: parsed.languageOverride,
           scheduledForDate,
-          dispatchWhatsAppNow:
-            Boolean(isImmediate && parsed.sendWhatsAppApproval && normalizedPhone),
-          whatsappPhone: normalizedPhone || null,
+          dispatchEmailApprovalNow: Boolean(
+            isImmediate && parsed.sendEmailApproval && normalizedApprover
+          ),
+          approverEmail: normalizedApprover,
         });
         prepared.push(summary);
       } catch (err) {
@@ -179,18 +193,20 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const whatsappSentCount = prepared.filter((p) => p.whatsappDispatched).length;
+    const emailApprovalSentCount = prepared.filter(
+      (p) => p.emailApprovalDispatched
+    ).length;
 
     await adminSupabase.from("notifications").insert({
       user_id: user.id,
       title: scheduledForDate
         ? `${prepared.length} Offer(s) Scheduled for ${scheduledForDate}`
-        : `${prepared.length} Offer(s) Prepared${whatsappSentCount > 0 ? ` & Sent to WhatsApp` : ""}`,
+        : `${prepared.length} Offer(s) Prepared${emailApprovalSentCount > 0 ? ` & Sent to Your Email` : ""}`,
       message: scheduledForDate
-        ? `Tailored emails and Cover Letter PDFs were generated for ${prepared.length} selected offer(s) and scheduled for WhatsApp approval on ${scheduledForDate}.`
+        ? `Tailored emails and Cover Letter PDFs were generated for ${prepared.length} selected offer(s) and scheduled for Email Approval on ${scheduledForDate}.`
         : `Generated ${prepared.length} tailored application(s)${
-            whatsappSentCount > 0
-              ? ` and dispatched ${whatsappSentCount} approval card(s) via Kapso WhatsApp.`
+            emailApprovalSentCount > 0
+              ? ` and sent ${emailApprovalSentCount} approval email(s) to ${normalizedApprover}.`
               : ` in your Approval Queue.`
           }`,
       category: "automation",
@@ -202,7 +218,7 @@ export async function POST(request: NextRequest) {
       executionTiming: parsed.executionTiming,
       scheduledForDate,
       preparedCount: prepared.length,
-      whatsappSentCount,
+      emailApprovalSentCount,
       prepared,
       errors,
     });

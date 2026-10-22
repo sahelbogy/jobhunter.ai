@@ -1,9 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminSupabaseClient } from "@/lib/supabase/admin";
-import {
-  dispatchApplicationToWhatsAppForApproval,
-  normalizeWhatsAppPhone,
-} from "@/lib/whatsapp/kapso";
+import { dispatchApplicationToEmailForApproval } from "@/lib/email/approval-loop";
 import { executeAutomationRunForUser } from "@/lib/automation/runner";
 
 /**
@@ -14,7 +11,7 @@ import { executeAutomationRunForUser } from "@/lib/automation/runner";
  * 3) Pre-generated batch applications scheduled for today (`applications.scheduled_for_date <= today`)
  *
  * Protected by mandatory `CRON_SECRET` Bearer authorization header.
- * Never auto-sends applications prior to explicit human approval.
+ * Never auto-sends applications to employers prior to explicit human email approval.
  */
 export async function GET(request: NextRequest) {
   const cronSecret = process.env.CRON_SECRET?.trim();
@@ -34,7 +31,7 @@ export async function GET(request: NextRequest) {
     const { data: enabledUsers, error } = await admin
       .from("automation_settings")
       .select(
-        "user_id, schedule_mode, scheduled_date, whatsapp_enabled, whatsapp_phone_number"
+        "user_id, schedule_mode, scheduled_date, email_approval_enabled, approval_email_recipient"
       )
       .eq("is_enabled", true)
       .limit(25);
@@ -68,28 +65,27 @@ export async function GET(request: NextRequest) {
       .from("applications")
       .select("id, user_id")
       .eq("approval_status", "awaiting_approval")
-      .is("whatsapp_notified_at", null)
+      .is("approval_email_sent_at", null)
       .not("scheduled_for_date", "is", null)
       .lte("scheduled_for_date", todayUtc)
       .limit(30);
 
-    let standaloneScheduledWhatsAppSent = 0;
+    let standaloneScheduledEmailsSent = 0;
     for (const due of remainingDueApps ?? []) {
       const { data: s } = await admin
         .from("automation_settings")
-        .select("whatsapp_enabled, whatsapp_phone_number")
+        .select("email_approval_enabled, approval_email_recipient")
         .eq("user_id", due.user_id)
         .maybeSingle();
 
-      const phone = normalizeWhatsAppPhone(s?.whatsapp_phone_number ?? "");
-      if (s?.whatsapp_enabled && phone) {
-        const res = await dispatchApplicationToWhatsAppForApproval({
+      if (s?.email_approval_enabled !== false) {
+        const res = await dispatchApplicationToEmailForApproval({
           adminSupabase: admin,
           userId: due.user_id,
           applicationId: due.id,
-          whatsappPhone: phone,
+          approverEmail: s?.approval_email_recipient?.trim() || null,
         }).catch(() => ({ dispatched: false }));
-        if (res.dispatched) standaloneScheduledWhatsAppSent += 1;
+        if (res.dispatched) standaloneScheduledEmailsSent += 1;
       }
     }
 
@@ -97,7 +93,7 @@ export async function GET(request: NextRequest) {
       ok: true,
       dateUtc: todayUtc,
       processedUsers: summaries.length,
-      standaloneScheduledWhatsAppSent,
+      standaloneScheduledEmailsSent,
       summaries,
     });
   } catch (err) {
